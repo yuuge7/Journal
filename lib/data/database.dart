@@ -71,6 +71,57 @@ class Attachments extends Table {
 }
 
 // ---------------------------------------------------------------------------
+// Day math
+// ---------------------------------------------------------------------------
+//
+// drift stores DateTimes as unix seconds and returns them as *local* times,
+// while SQLite's strftime(…, 'unixepoch') formats in UTC. Bucketing entries
+// into days inside SQL therefore pushes anything written near midnight into
+// the neighbouring day (an entry dated the 22nd at 01:30 in UTC+3 is grouped
+// under the 21st). All day bucketing happens in Dart instead; SQL only gets
+// range filters whose bounds are local midnights.
+
+/// Local calendar day (midnight) that [dt] falls on.
+DateTime localDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+/// Number of the calendar day [dt] falls on, counted from the epoch.
+///
+/// Use differences of this instead of `Duration.inDays` between two days: a
+/// calendar day is 23 or 25 hours long around a DST switch, which makes
+/// `inDays` report 0 for two genuinely consecutive days.
+int dayOrdinal(DateTime dt) =>
+    DateTime.utc(dt.year, dt.month, dt.day).millisecondsSinceEpoch ~/
+        Duration.millisecondsPerDay;
+
+/// Current and longest run of consecutive days that have at least one entry.
+///
+/// Days after [now] (entries dated into the future) never start or extend the
+/// current streak; the current streak is only alive if the newest past day is
+/// today or yesterday.
+StreakInfo computeStreaks(Iterable<DateTime> entryDates, {DateTime? now}) {
+  final today = dayOrdinal(now ?? DateTime.now());
+  final days = <int>{for (final d in entryDates) dayOrdinal(d)}.toList()..sort();
+  if (days.isEmpty) return const StreakInfo(current: 0, longest: 0);
+
+  var longest = 1, run = 1;
+  for (var i = 1; i < days.length; i++) {
+    run = days[i] - days[i - 1] == 1 ? run + 1 : 1;
+    if (run > longest) longest = run;
+  }
+
+  final past = days.where((d) => d <= today).toList();
+  if (past.isEmpty || today - past.last > 1) {
+    return StreakInfo(current: 0, longest: longest);
+  }
+  var current = 1;
+  for (var i = past.length - 1; i > 0; i--) {
+    if (past[i] - past[i - 1] != 1) break;
+    current++;
+  }
+  return StreakInfo(current: current, longest: longest);
+}
+
+// ---------------------------------------------------------------------------
 // Result helpers
 // ---------------------------------------------------------------------------
 
@@ -263,24 +314,34 @@ class AppDatabase extends _$AppDatabase {
   // Throwback / "On this day"
   // -------------------------------------------------------------------------
 
-  /// Entries from previous years whose entryDate has the same day + month as
-  /// [today]. Drift stores DateTimes as unix seconds, hence 'unixepoch'.
+  /// How many years back "on this day" looks. Well past a lifetime of
+  /// journaling, and the date picker cannot reach further than year 2000.
+  static const _throwbackYears = 60;
+
+  /// Entries from previous years whose entryDate falls on the same day + month
+  /// as [today].
+  ///
+  /// Matching is a union of local-midnight day ranges, one per past year, so
+  /// the comparison stays in local time and DST cannot shift a day.
   Stream<List<Entry>> watchThrowback(DateTime today) {
-    final mmdd =
-        "${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
-    return customSelect(
-      "SELECT * FROM entries "
-      "WHERE strftime('%m-%d', entry_date, 'unixepoch') = ?1 "
-      "AND CAST(strftime('%Y', entry_date, 'unixepoch') AS INTEGER) < ?2 "
-      "AND is_draft = 0 "
-      "ORDER BY entry_date DESC",
-      variables: [
-        Variable.withString(mmdd),
-        Variable.withInt(today.year),
-      ],
-      readsFrom: {entries},
-    ).watch().map((rows) =>
-        [for (final row in rows) entries.map(row.data)]);
+    Expression<bool>? sameDay;
+    for (var year = today.year - 1;
+        year >= today.year - _throwbackYears;
+        year--) {
+      final start = DateTime(year, today.month, today.day);
+      // Feb 29 rolls into Mar 1 in a common year — that year has no such day.
+      if (start.month != today.month) continue;
+      final end = DateTime(year, today.month, today.day + 1);
+      final range = entries.entryDate.isBiggerOrEqualValue(start) &
+          entries.entryDate.isSmallerThanValue(end);
+      sameDay = sameDay == null ? range : sameDay | range;
+    }
+    if (sameDay == null) return Stream.value(const []);
+
+    return (select(entries)
+          ..where((e) => e.isDraft.equals(false) & sameDay!)
+          ..orderBy([(e) => OrderingTerm.desc(e.entryDate)]))
+        .watch();
   }
 
   // -------------------------------------------------------------------------
@@ -288,36 +349,30 @@ class AppDatabase extends _$AppDatabase {
   // -------------------------------------------------------------------------
 
   /// Entry counts per day for the given month, for calendar markers.
+  /// Keys are local midnights, matching what the calendar grid asks for.
   Stream<Map<DateTime, int>> watchMonthCounts(DateTime month) {
     final first = DateTime(month.year, month.month, 1);
     final last = DateTime(month.year, month.month + 1, 1);
-    return customSelect(
-      "SELECT strftime('%Y-%m-%d', entry_date, 'unixepoch') AS day, "
-      "COUNT(*) AS c FROM entries "
-      "WHERE entry_date >= ?1 AND entry_date < ?2 AND is_draft = 0 "
-      "GROUP BY day",
-      variables: [
-        Variable.withInt(first.millisecondsSinceEpoch ~/ 1000),
-        Variable.withInt(last.millisecondsSinceEpoch ~/ 1000),
-      ],
-      readsFrom: {entries},
-    ).watch().map((rows) {
+    return _watchEntryDates((e) =>
+            e.entryDate.isBiggerOrEqualValue(first) &
+            e.entryDate.isSmallerThanValue(last))
+        .map((dates) {
       final map = <DateTime, int>{};
-      for (final row in rows) {
-        final parts = row.read<String>('day').split('-');
-        map[DateTime(
-                int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]))] =
-            row.read<int>('c');
+      for (final date in dates) {
+        map.update(localDay(date), (c) => c + 1, ifAbsent: () => 1);
       }
       return map;
     });
   }
 
+  /// The entries shown when a calendar day is tapped — the same set the dot
+  /// markers count, so a day never shows entries without a dot.
   Stream<List<Entry>> watchEntriesOn(DateTime day) {
     final start = DateTime(day.year, day.month, day.day);
-    final end = start.add(const Duration(days: 1));
+    final end = DateTime(day.year, day.month, day.day + 1);
     return (select(entries)
           ..where((e) =>
+              e.isDraft.equals(false) &
               e.entryDate.isBiggerOrEqualValue(start) &
               e.entryDate.isSmallerThanValue(end))
           ..orderBy([(e) => OrderingTerm.desc(e.entryDate)]))
@@ -328,58 +383,27 @@ class AppDatabase extends _$AppDatabase {
   // Statistics
   // -------------------------------------------------------------------------
 
-  /// Distinct writing days, newest first, as 'yyyy-MM-dd' strings.
-  Stream<List<String>> _watchDistinctDays() {
-    return customSelect(
-      "SELECT DISTINCT strftime('%Y-%m-%d', entry_date, 'unixepoch') AS day "
-      "FROM entries WHERE is_draft = 0 ORDER BY day DESC",
-      readsFrom: {entries},
-    ).watch().map((rows) => [for (final r in rows) r.read<String>('day')]);
+  /// entryDates of every non-draft entry, optionally narrowed by [filter].
+  /// Only the date column is read, so bucketing in Dart stays cheap.
+  Stream<List<DateTime>> _watchEntryDates(
+      [Expression<bool> Function($EntriesTable e)? filter]) {
+    final q = selectOnly(entries)..addColumns([entries.entryDate]);
+    q.where(entries.isDraft.equals(false) &
+        (filter == null ? const Constant(true) : filter(entries)));
+    return q.watch().map(
+        (rows) => [for (final r in rows) r.read(entries.entryDate)!]);
   }
 
   /// Streaks = consecutive calendar days with at least one entry.
-  Stream<StreakInfo> watchStreaks() {
-    return _watchDistinctDays().map((dayStrings) {
-      if (dayStrings.isEmpty) {
-        return const StreakInfo(current: 0, longest: 0);
-      }
-      final days = dayStrings.map(DateTime.parse).toList(); // newest first
-
-      // Longest run anywhere in history.
-      var longest = 1, run = 1;
-      for (var i = 1; i < days.length; i++) {
-        if (days[i - 1].difference(days[i]).inDays == 1) {
-          run++;
-          if (run > longest) longest = run;
-        } else {
-          run = 1;
-        }
-      }
-
-      // Current streak: counts if the last write was today or yesterday.
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      var current = 0;
-      if (today.difference(days.first).inDays <= 1) {
-        current = 1;
-        for (var i = 1; i < days.length; i++) {
-          if (days[i - 1].difference(days[i]).inDays == 1) {
-            current++;
-          } else {
-            break;
-          }
-        }
-      }
-      return StreakInfo(current: current, longest: longest);
-    });
-  }
+  Stream<StreakInfo> watchStreaks() =>
+      _watchEntryDates().map((dates) => computeStreaks(dates));
 
   Stream<GlobalStats> watchGlobalStats() {
     return customSelect(
       "SELECT "
       "(SELECT COUNT(*) FROM entries WHERE is_draft = 0) AS total_entries, "
       "(SELECT COALESCE(SUM(word_count), 0) FROM entries WHERE is_draft = 0) AS total_words, "
-      "(SELECT COALESCE(SUM(writing_seconds), 0) FROM entries) AS total_seconds, "
+      "(SELECT COALESCE(SUM(writing_seconds), 0) FROM entries WHERE is_draft = 0) AS total_seconds, "
       "(SELECT COUNT(*) FROM attachments) AS total_attachments",
       readsFrom: {entries, attachments},
     ).watchSingle().map((row) {
@@ -396,18 +420,22 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
-  /// Entries per journal, for the stats screen.
+  /// Entries per day over the 30 days ending today, oldest first. Entries
+  /// dated in the future are left out — the chart only draws these 30 days.
   Stream<List<DayCount>> watchLast30DaysActivity() {
-    final cutoff = DateTime.now().subtract(const Duration(days: 30));
-    return customSelect(
-      "SELECT strftime('%Y-%m-%d', entry_date, 'unixepoch') AS day, "
-      "COUNT(*) AS c FROM entries "
-      "WHERE entry_date >= ?1 AND is_draft = 0 GROUP BY day ORDER BY day",
-      variables: [Variable.withInt(cutoff.millisecondsSinceEpoch ~/ 1000)],
-      readsFrom: {entries},
-    ).watch().map((rows) => [
-          for (final r in rows)
-            DayCount(DateTime.parse(r.read<String>('day')), r.read<int>('c'))
-        ]);
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day - 29);
+    final end = DateTime(now.year, now.month, now.day + 1);
+    return _watchEntryDates((e) =>
+            e.entryDate.isBiggerOrEqualValue(start) &
+            e.entryDate.isSmallerThanValue(end))
+        .map((dates) {
+      final counts = <DateTime, int>{};
+      for (final date in dates) {
+        counts.update(localDay(date), (c) => c + 1, ifAbsent: () => 1);
+      }
+      final days = counts.keys.toList()..sort();
+      return [for (final day in days) DayCount(day, counts[day]!)];
+    });
   }
 }

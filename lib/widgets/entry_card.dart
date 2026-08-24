@@ -8,6 +8,14 @@ import '../data/database.dart';
 import '../providers.dart';
 import '../screens/editor_screen.dart';
 
+/// Time spent writing an entry, shortened for the feed: `45s`, `12m`, `2h 5m`.
+String formatWritingTime(int seconds) {
+  if (seconds < 60) return '${seconds}s';
+  final minutes = seconds ~/ 60;
+  if (minutes < 60) return '${minutes}m';
+  return '${minutes ~/ 60}h ${minutes % 60}m';
+}
+
 class EntryCard extends ConsumerWidget {
   const EntryCard({super.key, required this.entry, this.showYear = false});
 
@@ -106,7 +114,10 @@ class EntryCard extends ConsumerWidget {
                       ]),
                     ],
                     const SizedBox(height: 6),
-                    Text('${entry.wordCount} words',
+                    Text(
+                        entry.writingSeconds > 0
+                            ? '${entry.wordCount} words  ·  ✍ ${formatWritingTime(entry.writingSeconds)}'
+                            : '${entry.wordCount} words',
                         style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.outline)),
                   ],

@@ -114,8 +114,19 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       _titleController.text.trim().isEmpty &&
       _quill!.document.toPlainText().trim().isEmpty;
 
+  /// Serializes writes: the debounced auto-save can fire while an attachment
+  /// or tag edit is still persisting, and two overlapping runs would both see
+  /// a null `_entryId` and insert the entry twice.
+  Future<void> _persistQueue = Future.value();
+
+  Future<void> _persist({required bool draft}) {
+    final next = _persistQueue.then((_) => _write(draft: draft));
+    _persistQueue = next.catchError((_) {});
+    return next;
+  }
+
   /// Writes the entry. Inserts on first call, updates afterwards.
-  Future<void> _persist({required bool draft}) async {
+  Future<void> _write({required bool draft}) async {
     if (_quill == null || _journalId == null) return;
     final db = ref.read(databaseProvider);
 
@@ -267,11 +278,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        // Leaving via back = keep content, autosave state as-is.
+        // Back is a normal way to leave the editor, so it finalizes the entry
+        // exactly like Done does. Leaving it as a draft would hide it from
+        // streaks, calendar dots and stats, which all skip drafts.
         if (_isEmpty) {
           await _discardIfEmpty();
         } else {
-          await _persist(draft: _isDraft);
+          await _persist(draft: false);
         }
         if (!mounted) return;
         Navigator.of(this.context).pop();
