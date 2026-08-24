@@ -1,0 +1,156 @@
+name: Release
+
+# Every push to main ships a release. The version is bumped first, so a run can
+# never overwrite the release of a previous run: the minor number climbs until
+# it finds a free tag (v1.0, v1.1, v1.2 …) and the Android versionCode climbs
+# with it, which is what lets the new APK install over the old one.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two pushes in quick succession must not race for the same version.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: "3.47.0"
+  JAVA_VERSION: "21"
+
+jobs:
+  release:
+    name: Build and publish
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch existing tags
+        run: git fetch --tags --force
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # drift's tests open a real SQLite database through package:sqlite3.
+      - name: Install SQLite headers
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Decide the next version
+        id: version
+        run: |
+          set -euo pipefail
+          raw=$(grep -m1 -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//')
+          name=${raw%%+*}
+          code=${raw##*+}
+          major=$(echo "$name" | cut -d. -f1)
+          minor=$(echo "$name" | cut -d. -f2)
+
+          # Climb past every version that has already been released.
+          bumped=false
+          while git rev-parse -q --verify "refs/tags/v$major.$minor" >/dev/null; do
+            minor=$((minor + 1))
+            code=$((code + 1))
+            bumped=true
+          done
+
+          version="$major.$minor.0+$code"
+          tag="v$major.$minor"
+          if [ "$bumped" = true ]; then
+            sed -i -E "s/^version:.*/version: $version/" pubspec.yaml
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "code=$code"
+            echo "bumped=$bumped"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing Journal $tag ($version)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore the release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ] || [ -z "${KEYSTORE_PASSWORD:-}" ]; then
+            echo "::error::Missing signing secrets. Add KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD under Settings → Secrets and variables → Actions (see README → Signing). Releasing with a debug key would make future updates uninstallable, so the build stops here."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > journal-release.jks
+          cat > android/key.properties <<PROPS
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS:-journal}
+          storeFile=../../journal-release.jks
+          PROPS
+
+      - name: Build the release APK
+        run: flutter build apk --release
+
+      - name: Verify the signature and name the artifact
+        run: |
+          set -euo pipefail
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          apksigner=$(find "$sdk/build-tools" -maxdepth 2 -name apksigner 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --print-certs "$apk" > certs.txt
+            head -20 certs.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::apksigner not found on the runner, signature not verified"
+          fi
+          mkdir -p dist
+          cp "$apk" "dist/Journal-${{ steps.version.outputs.tag }}.apk"
+
+      - name: Push the version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.version.outputs.bumped }}" = "true" ]; then
+            git add pubspec.yaml
+            git commit -m "chore(release): Journal ${{ steps.version.outputs.tag }} [skip ci]"
+            git push origin HEAD:main ||
+              { git pull --rebase origin main && git push origin HEAD:main; }
+          fi
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Journal ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "dist/Journal-${{ steps.version.outputs.tag }}.apk" \
+            --title "Journal ${{ steps.version.outputs.tag }}" \
+            --generate-notes
