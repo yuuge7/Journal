@@ -39,10 +39,39 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
+  # Bundled, not fetched. The app has no network path at all, so a runtime font
+  # loader (google_fonts) would silently fall back to Roboto on first launch —
+  # exactly the surface where the type is supposed to carry the identity.
+  # Both families are OFL; the licences ship next to the files.
+  fonts:
+    - family: Schibsted Grotesk
+      fonts:
+        - asset: assets/fonts/SchibstedGrotesk-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/SchibstedGrotesk-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/SchibstedGrotesk-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/SchibstedGrotesk-Bold.ttf
+          weight: 700
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/Literata-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Literata-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Literata-Italic.ttf
+          weight: 400
+          style: italic
+
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon/icon.png"
-  adaptive_icon_background: "#5B4699"
+  adaptive_icon_background: "assets/icon/background.png"
   adaptive_icon_foreground: "assets/icon/foreground.png"
+  # 0, not the plugin default of 16: the safe-zone padding is baked into the
+  # source PNGs, and insetting again shrank the artwork to a quarter of the
+  # icon — a speck in a flat field on any launcher that masks to a circle.
+  adaptive_icon_foreground_inset: 0
   adaptive_icon_monochrome: "assets/icon/monochrome.png"

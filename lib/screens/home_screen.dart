@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../providers.dart';
+import '../widgets/nav_bar.dart';
 import 'calendar_screen.dart';
-import 'editor_screen.dart';
 import 'feed_screen.dart';
 import 'settings_screen.dart';
 import 'stats_screen.dart';
@@ -25,39 +24,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     SettingsScreen(),
   ];
 
+  // Named the way the person thinks about them, not after the screen classes.
+  static const _items = [
+    NavItem(
+        icon: Icons.notes_outlined,
+        activeIcon: Icons.notes_rounded,
+        label: 'Entries'),
+    NavItem(
+        icon: Icons.calendar_today_outlined,
+        activeIcon: Icons.calendar_today_rounded,
+        label: 'Calendar'),
+    NavItem(
+        icon: Icons.show_chart_outlined,
+        activeIcon: Icons.show_chart_rounded,
+        label: 'Progress'),
+    NavItem(
+        icon: Icons.tune_outlined,
+        activeIcon: Icons.tune_rounded,
+        label: 'Settings'),
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(index: _tab, children: _screens),
-      floatingActionButton: _tab == 0
-          ? FloatingActionButton(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => EditorScreen(
-                      journalId: ref.read(selectedJournalProvider)))),
-              child: const Icon(Icons.edit_outlined),
-            )
-          : null,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.auto_stories_outlined),
-              selectedIcon: Icon(Icons.auto_stories),
-              label: 'Journal'),
-          NavigationDestination(
-              icon: Icon(Icons.calendar_month_outlined),
-              selectedIcon: Icon(Icons.calendar_month),
-              label: 'Calendar'),
-          NavigationDestination(
-              icon: Icon(Icons.insights_outlined),
-              selectedIcon: Icon(Icons.insights),
-              label: 'Stats'),
-          NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: 'Settings'),
-        ],
+      bottomNavigationBar: AppNavBar(
+        items: _items,
+        index: _tab,
+        onSelected: (i) => setState(() => _tab = i),
       ),
     );
   }

@@ -81,6 +81,15 @@ class Attachments extends Table {
 // under the 21st). All day bucketing happens in Dart instead; SQL only gets
 // range filters whose bounds are local midnights.
 
+/// Words in [text], counted the same way everywhere: whitespace-separated
+/// runs of a trimmed string. The editor, the feed card and the v2 migration
+/// all go through here so a count can never disagree with itself.
+int countWords(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return 0;
+  return trimmed.split(RegExp(r'\s+')).length;
+}
+
 /// Local calendar day (midnight) that [dt] falls on.
 DateTime localDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
@@ -164,7 +173,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.withExecutor(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -177,10 +186,39 @@ class AppDatabase extends _$AppDatabase {
             emoji: const Value('📔'),
           ));
         },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) await _repairWordCounts();
+        },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
         },
       );
+
+  /// Recomputes every stored word count from the plain-text mirror.
+  ///
+  /// Before v2 the editor read its count off a listener bound to the Quill
+  /// document it was created with. Loading a template swapped that document
+  /// out, so the listener stopped firing and the count froze at the template's
+  /// own length — zero for the "Blank" template, which is what the feed then
+  /// showed however much was written. `plainText` was always written from the
+  /// live document, so it is the trustworthy side of the pair.
+  Future<void> _repairWordCounts() async {
+    final rows = await select(entries).get();
+    final stale = [
+      for (final e in rows)
+        if (countWords(e.plainText) != e.wordCount) e
+    ];
+    if (stale.isEmpty) return;
+    await batch((b) {
+      for (final e in stale) {
+        b.update(
+          entries,
+          EntriesCompanion(wordCount: Value(countWords(e.plainText))),
+          where: (t) => t.id.equals(e.id),
+        );
+      }
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Journals

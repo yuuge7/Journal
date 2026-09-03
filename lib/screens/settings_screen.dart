@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
 
 import '../providers.dart';
+import '../theme/app_theme.dart';
 import '../services/backup_service.dart';
 import '../services/save_file.dart';
 
@@ -111,21 +112,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final busy = _progress != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: Text('Settings', style: Theme.of(context).textTheme.displayLarge),
+        toolbarHeight: 72,
+      ),
       body: ListView(children: [
         const _SectionHeader('Backup'),
         ListTile(
           leading: const Icon(Icons.upload_outlined),
-          title: const Text('Export encrypted backup'),
+          title: const Text('Export a backup'),
           subtitle: const Text(
-              'ZIP with all entries + images, AES-256 encrypted with your password'),
+              'One encrypted file holding every entry, photo and tag. '
+              'You choose the password, and only that password opens it.'),
           enabled: !busy,
           onTap: _export,
         ),
         ListTile(
           leading: const Icon(Icons.download_outlined),
-          title: const Text('Import backup'),
-          subtitle: const Text('Merges a .mjbackup file into this device'),
+          title: const Text('Import a backup'),
+          subtitle: const Text(
+              'Adds the entries from a backup file. Nothing already on this '
+              'device is replaced.'),
           enabled: !busy,
           onTap: _import,
         ),
@@ -145,9 +152,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         const _SectionHeader('About'),
         const ListTile(
           leading: Icon(Icons.lock_outline),
-          title: Text('Your data stays on this device'),
+          title: Text('Your writing stays on this device'),
           subtitle: Text(
-              'Everything is stored locally in SQLite. Backups leave the device only when you share them.'),
+              'There is no account and nothing is uploaded. A backup is the '
+              'only copy that ever leaves the phone, and only when you send it.'),
         ),
       ]),
     );
@@ -161,12 +169,9 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(title,
-          style: Theme.of(context)
-              .textTheme
-              .labelLarge
-              ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 6),
+      child: Text(title.toUpperCase(),
+          style: Theme.of(context).textTheme.utility),
     );
   }
 }

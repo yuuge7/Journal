@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#5B4699</color>
+    <!-- Ground of the light theme; shown for the frames before Flutter draws. -->
+    <color name="launch_background">#E4E5E0</color>
 </resources>

@@ -11,9 +11,11 @@ import 'package:rxdart/rxdart.dart';
 
 import '../data/database.dart';
 import '../providers.dart';
+import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/formatting.dart';
+import '../widgets/mood_meter.dart';
 import '../widgets/template_sheet.dart';
-
-const moodEmojis = ['😞', '😕', '😐', '🙂', '😄'];
 
 class EditorScreen extends ConsumerStatefulWidget {
   const EditorScreen({super.key, this.entryId, this.initialDate, this.journalId});
@@ -89,10 +91,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     _recountWords();
 
     // Auto-save draft: debounce edits (2s quiet period) before hitting the DB.
-    _docSub = _quill!.document.changes.listen((_) {
-      _recountWords();
-      _dirty.add(null);
-    });
+    _bindDocument();
     _titleController.addListener(() => _dirty.add(null));
     _autoSaveSub = _dirty
         .debounceTime(const Duration(seconds: 2))
@@ -104,10 +103,22 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
   }
 
+  /// Subscribes to the *current* document.
+  ///
+  /// `QuillController.document = doc` swaps in a new [Document], and each one
+  /// owns its own `changes` stream — a subscription taken before the swap goes
+  /// silent, which is how loading a template used to freeze the word count.
+  /// Every place that replaces the document calls this again.
+  void _bindDocument() {
+    _docSub?.cancel();
+    _docSub = _quill!.document.changes.listen((_) {
+      _recountWords();
+      _dirty.add(null);
+    });
+  }
+
   void _recountWords() {
-    final text = _quill!.document.toPlainText().trim();
-    _wordCount.value =
-        text.isEmpty ? 0 : text.split(RegExp(r'\s+')).length;
+    _wordCount.value = countWords(_quill!.document.toPlainText());
   }
 
   bool get _isEmpty =>
@@ -134,7 +145,12 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     _stopwatch.reset(); // keeps running; we accumulate into the stored total
     _savedWritingSeconds += elapsed;
 
+    // Counted from the document being written, not from the notifier: the
+    // stored count and the stored plain text then can never disagree.
     final plain = _quill!.document.toPlainText().trim();
+    final words = countWords(plain);
+    if (mounted) _wordCount.value = words;
+
     final companion = EntriesCompanion(
       journalId: Value(_journalId!),
       title: Value(_titleController.text.trim()),
@@ -142,7 +158,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       plainText: Value(plain),
       entryDate: Value(_entryDate),
       updatedAt: Value(DateTime.now()),
-      wordCount: Value(_wordCount.value),
+      wordCount: Value(words),
       writingSeconds: Value(_savedWritingSeconds),
       mood: Value(_mood),
       isDraft: Value(draft),
@@ -155,7 +171,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         contentJson: jsonEncode(_quill!.document.toDelta().toJson()),
         plainText: Value(plain),
         entryDate: _entryDate,
-        wordCount: Value(_wordCount.value),
+        wordCount: Value(words),
         writingSeconds: Value(_savedWritingSeconds),
         mood: Value(_mood),
         isDraft: Value(draft),
@@ -188,6 +204,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     if (template == null || _quill == null) return;
     final doc = Document.fromJson(jsonDecode(template.deltaJson) as List);
     _quill!.document = doc;
+    _bindDocument();
     _recountWords();
     _dirty.add(null);
     _editorFocus.requestFocus();
@@ -273,6 +290,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
     final journals = ref.watch(journalsProvider).value ?? [];
     final theme = Theme.of(context);
+    final t = context.tokens;
 
     return PopScope(
       canPop: false,
@@ -290,103 +308,161 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         Navigator.of(this.context).pop();
       },
       child: Scaffold(
+        backgroundColor: t.page,
         appBar: AppBar(
-          title: TextButton.icon(
-            onPressed: _pickDate,
-            icon: const Icon(Icons.event, size: 18),
-            label: Text(DateFormat.yMMMd().format(_entryDate)),
-          ),
+          backgroundColor: t.page,
+          title: journals.isEmpty
+              ? null
+              : _JournalPicker(
+                  journals: journals,
+                  journalId: _journalId,
+                  onChanged: (v) {
+                    setState(() => _journalId = v);
+                    _dirty.add(null);
+                  },
+                ),
+          titleSpacing: 4,
           actions: [
             IconButton(
-              tooltip: 'Templates',
-              icon: const Icon(Icons.auto_awesome_outlined),
+              tooltip: 'Start from a template',
+              icon: const Icon(Icons.article_outlined, size: 20),
               onPressed: _pickTemplate,
             ),
             IconButton(
-              tooltip: 'Attach image',
-              icon: const Icon(Icons.add_photo_alternate_outlined),
+              tooltip: 'Add a photo',
+              icon: const Icon(Icons.image_outlined, size: 20),
               onPressed: _attachImage,
             ),
-            FilledButton.tonal(
+            const SizedBox(width: 4),
+            FilledButton(
               onPressed: _saveAndClose,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(64, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+              ),
               child: const Text('Done'),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 12),
           ],
         ),
         body: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(children: [
-                if (journals.isNotEmpty)
-                  DropdownButton<int>(
-                    value: _journalId,
-                    underline: const SizedBox.shrink(),
-                    items: [
-                      for (final j in journals)
-                        DropdownMenuItem(
-                            value: j.id, child: Text('${j.emoji} ${j.name}'))
-                    ],
-                    onChanged: (v) {
-                      setState(() => _journalId = v);
-                      _dirty.add(null);
-                    },
-                  ),
-                const Spacer(),
-                for (var i = 0; i < moodEmojis.length; i++)
-                  GestureDetector(
-                    onTap: () {
-                      setState(() => _mood = _mood == i + 1 ? null : i + 1);
-                      _dirty.add(null);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 150),
-                        opacity: _mood == null || _mood == i + 1 ? 1 : 0.3,
-                        child: Text(moodEmojis[i],
-                            style: const TextStyle(fontSize: 22)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // The date reads as a letterhead on the page, and tapping it
+                  // is how an old memory gets filed under the day it happened.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 20, 0),
+                    child: TextButton.icon(
+                      onPressed: _pickDate,
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 44),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        foregroundColor: t.inkDim,
+                      ),
+                      icon: const Icon(Icons.event_outlined, size: 16),
+                      label: Text(
+                        DateFormat('d MMMM yyyy').format(_entryDate).toUpperCase(),
+                        style: theme.textTheme.utility.copyWith(color: t.inkDim),
                       ),
                     ),
                   ),
-              ]),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _titleController,
-                style: theme.textTheme.headlineSmall,
-                decoration: const InputDecoration(
-                    hintText: 'Title', border: InputBorder.none),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 0),
+                    child: TextField(
+                      controller: _titleController,
+                      style: theme.textTheme.displayMedium,
+                      maxLines: null,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: InputDecoration(
+                        hintText: 'Title',
+                        hintStyle: theme.textTheme.displayMedium!
+                            .copyWith(color: t.inkFaint),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                      ),
+                    ),
+                  ),
+                  _TagRow(tags: _tags, onEdit: _editTags),
+                  if (_entryId != null) _AttachmentStrip(entryId: _entryId!),
+                  Expanded(
+                    // Quill derives every style from the ambient DefaultTextStyle,
+                    // so the reading face is set once here rather than per block.
+                    child: DefaultTextStyle(
+                      style: theme.textTheme.bodyLarge!,
+                      child: QuillEditor.basic(
+                        controller: quill,
+                        focusNode: _editorFocus,
+                        config: QuillEditorConfig(
+                          placeholder: 'Write about today',
+                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                          customStyles: DefaultStyles(
+                            paragraph: DefaultTextBlockStyle(
+                              theme.textTheme.bodyLarge!,
+                              const HorizontalSpacing(0, 0),
+                              const VerticalSpacing(0, 8),
+                              VerticalSpacing.zero,
+                              null,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            _TagRow(tags: _tags, onEdit: _editTags),
-            if (_entryId != null) _AttachmentStrip(entryId: _entryId!),
-            const Divider(height: 1),
-            Expanded(
-              child: QuillEditor.basic(
+            _MoodStrip(
+              mood: _mood,
+              onChanged: (m) {
+                setState(() => _mood = m);
+                _dirty.add(null);
+              },
+            ),
+            Container(
+              decoration: BoxDecoration(
+                color: t.ground,
+                border: Border(top: BorderSide(color: t.hairline)),
+              ),
+              child: QuillSimpleToolbar(
                 controller: quill,
-                focusNode: _editorFocus,
-                config: const QuillEditorConfig(
-                  placeholder: 'Start writing…',
-                  padding: EdgeInsets.all(16),
+                config: QuillSimpleToolbarConfig(
+                  multiRowsDisplay: false,
+                  showFontFamily: false,
+                  showFontSize: false,
+                  showSubscript: false,
+                  showSuperscript: false,
+                  showSearchButton: false,
+                  showAlignmentButtons: false,
+                  showIndent: false,
+                  showDividers: false,
+                  showBackgroundColorButton: false,
+                  toolbarIconAlignment: WrapAlignment.start,
+                  buttonOptions: QuillSimpleToolbarButtonOptions(
+                    base: QuillToolbarBaseButtonOptions(
+                      iconSize: 17,
+                      iconTheme: QuillIconTheme(
+                        iconButtonUnselectedData: IconButtonData(
+                          color: t.inkDim,
+                          highlightColor: Colors.transparent,
+                        ),
+                        iconButtonSelectedData: IconButtonData(
+                          color: t.ink,
+                          style: IconButton.styleFrom(
+                            backgroundColor: t.pageEdge,
+                            shape: const RoundedRectangleBorder(
+                                borderRadius: Radii.chip),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            const Divider(height: 1),
-            QuillSimpleToolbar(
-              controller: quill,
-              config: const QuillSimpleToolbarConfig(
-                multiRowsDisplay: false,
-                showFontFamily: false,
-                showFontSize: false,
-                showSubscript: false,
-                showSuperscript: false,
-                showSearchButton: false,
-                showAlignmentButtons: false,
-                showIndent: false,
-                showDividers: false,
               ),
             ),
             _StatusBar(
@@ -401,6 +477,95 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 }
 
+/// Which notebook this entry belongs to.
+class _JournalPicker extends StatelessWidget {
+  const _JournalPicker(
+      {required this.journals, required this.journalId, required this.onChanged});
+
+  final List<Journal> journals;
+  final int? journalId;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final text = Theme.of(context).textTheme;
+    final current = journals.where((j) => j.id == journalId).firstOrNull;
+    return PopupMenuButton<int>(
+      tooltip: 'Change journal',
+      color: t.page,
+      position: PopupMenuPosition.under,
+      onSelected: onChanged,
+      itemBuilder: (context) => [
+        for (final j in journals)
+          PopupMenuItem(
+            value: j.id,
+            child: Row(children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: Color(j.color),
+                  borderRadius: const BorderRadius.all(Radius.circular(1.5)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text('${j.emoji} ${j.name}', style: text.titleSmall),
+            ]),
+          ),
+      ],
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (current != null) ...[
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: Color(current.color),
+                borderRadius: const BorderRadius.all(Radius.circular(1.5)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(current.name.toUpperCase(),
+                  style: text.utility.copyWith(color: t.inkDim),
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ],
+          Icon(Icons.expand_more, size: 16, color: t.inkFaint),
+        ]),
+      ),
+    );
+  }
+}
+
+/// How the day felt, asked once, at the foot of the page.
+class _MoodStrip extends StatelessWidget {
+  const _MoodStrip({required this.mood, required this.onChanged});
+
+  final int? mood;
+  final ValueChanged<int?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: t.page,
+        border: Border(top: BorderSide(color: t.hairline)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: MoodPicker(mood: mood, onChanged: onChanged),
+      ),
+    );
+  }
+}
+
 class _TagRow extends StatelessWidget {
   const _TagRow({required this.tags, required this.onEdit});
   final List<Tag> tags;
@@ -408,25 +573,35 @@ class _TagRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
+    final text = Theme.of(context).textTheme;
     return SizedBox(
       height: 44,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         children: [
-          ActionChip(
-            avatar: const Icon(Icons.sell_outlined, size: 16),
-            label: Text(tags.isEmpty ? 'Add tags' : 'Tags'),
-            onPressed: onEdit,
-          ),
-          const SizedBox(width: 6),
-          for (final t in tags)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Chip(
-                  label: Text('#${t.name}'),
-                  visualDensity: VisualDensity.compact),
+          for (final tag in tags)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Text('#${tag.name}',
+                    style: text.meta.copyWith(color: t.inkDim)),
+              ),
             ),
+          Center(
+            child: TextButton.icon(
+              onPressed: onEdit,
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                foregroundColor: t.inkDim,
+              ),
+              icon: Icon(Icons.sell_outlined, size: 15, color: t.inkDim),
+              label: Text(tags.isEmpty ? 'Add tags' : 'Edit tags',
+                  style: text.meta.copyWith(color: t.inkDim)),
+            ),
+          ),
         ],
       ),
     );
@@ -510,6 +685,12 @@ class _AttachmentStrip extends ConsumerWidget {
   }
 }
 
+/// The foot of the editor: what you have written, how long you have been at
+/// it, and whether it is safely on disk.
+///
+/// The save state is the point of this strip. Auto-save is the one thing in the
+/// app that happens without being asked, so it says so in words rather than
+/// leaving the person to trust a spinner.
 class _StatusBar extends StatelessWidget {
   const _StatusBar(
       {required this.wordCount,
@@ -523,33 +704,41 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.labelSmall;
+    final t = context.tokens;
+    final text = Theme.of(context).textTheme;
+    final style = text.utility;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      padding: const EdgeInsets.fromLTRB(20, 9, 20, 9),
+      decoration: BoxDecoration(
+        color: t.ground,
+        border: Border(top: BorderSide(color: t.hairline)),
+      ),
       child: Row(children: [
         ValueListenableBuilder<int>(
           valueListenable: wordCount,
-          builder: (context, count, _) => Text('$count words', style: style),
+          builder: (context, count, _) =>
+              Text(formatWords(count).toUpperCase(), style: style),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: 14),
         Text(
-            '✍ ${_fmtDuration(writingSeconds + stopwatch.elapsed.inSeconds)}',
-            style: style),
-        const Spacer(),
-        Text(
-          lastSavedAt == null
-              ? 'Not saved yet'
-              : 'Saved ${DateFormat.Hm().format(lastSavedAt!)}',
+          formatTotalTime(writingSeconds + stopwatch.elapsed.inSeconds)
+              .toUpperCase(),
           style: style,
+        ),
+        const Spacer(),
+        AnimatedSwitcher(
+          duration: Motion.quick,
+          child: Text(
+            lastSavedAt == null
+                ? 'NOT SAVED YET'
+                : 'SAVED ${DateFormat.Hm().format(lastSavedAt!)}',
+            key: ValueKey(lastSavedAt),
+            style: style.copyWith(
+                color: lastSavedAt == null ? t.inkFaint : t.inkDim),
+          ),
         ),
       ]),
     );
-  }
-
-  static String _fmtDuration(int seconds) {
-    final m = seconds ~/ 60, s = seconds % 60;
-    return m > 0 ? '${m}m ${s}s' : '${s}s';
   }
 }
 
