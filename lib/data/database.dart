@@ -70,6 +70,17 @@ class Attachments extends Table {
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
+/// App preferences as key/value pairs. Kept in the database rather than a
+/// separate preferences plugin so a setting is one more reactive stream like
+/// everything else. Device-local: backups do not carry it.
+class Settings extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+
+  @override
+  Set<Column> get primaryKey => {key};
+}
+
 // ---------------------------------------------------------------------------
 // Day math
 // ---------------------------------------------------------------------------
@@ -165,7 +176,8 @@ class GlobalStats {
 // Database
 // ---------------------------------------------------------------------------
 
-@DriftDatabase(tables: [Journals, Entries, Tags, EntryTags, Attachments])
+@DriftDatabase(
+    tables: [Journals, Entries, Tags, EntryTags, Attachments, Settings])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'journal'));
 
@@ -173,7 +185,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.withExecutor(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -188,6 +200,7 @@ class AppDatabase extends _$AppDatabase {
         },
         onUpgrade: (m, from, to) async {
           if (from < 2) await _repairWordCounts();
+          if (from < 3) await m.createTable(settings);
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -347,6 +360,27 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> removeAttachment(int id) =>
       (delete(attachments)..where((a) => a.id.equals(id))).go();
+
+  // -------------------------------------------------------------------------
+  // Settings
+  // -------------------------------------------------------------------------
+
+  static const _dayEndsAtKey = 'day_ends_at_hour';
+
+  /// Latest hour (0–[maxDayEndsAt]) up to which writing still belongs to the
+  /// previous day. 0 = the day ends at midnight, the behaviour before this
+  /// setting existed.
+  static const maxDayEndsAt = 11;
+
+  Stream<int> watchDayEndsAt() => (select(settings)
+        ..where((s) => s.key.equals(_dayEndsAtKey)))
+      .watchSingleOrNull()
+      .map((row) =>
+          (int.tryParse(row?.value ?? '') ?? 0).clamp(0, maxDayEndsAt));
+
+  Future<void> setDayEndsAt(int hour) => into(settings).insertOnConflictUpdate(
+      SettingsCompanion.insert(
+          key: _dayEndsAtKey, value: '${hour.clamp(0, maxDayEndsAt)}'));
 
   // -------------------------------------------------------------------------
   // Throwback / "On this day"

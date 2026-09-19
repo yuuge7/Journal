@@ -33,4 +33,26 @@ void main() {
     expect(formatBackfill(DateTime(2026, 9, 1), DateTime(2026, 9, 6)),
         'written 5 days later');
   });
+
+  test('writing before the day-ends-at hour still belongs to the day before',
+      () {
+    final day = DateTime(2026, 9, 3);
+    // Midnight cut-off: 00:30 the next morning is already a day later.
+    expect(formatBackfill(day, DateTime(2026, 9, 4, 0, 30)),
+        'written a day later');
+    // Day ends at 04:00: up to 03:59 is still the 3rd.
+    expect(formatBackfill(day, DateTime(2026, 9, 4, 2), dayEndsAt: 4), isNull);
+    expect(formatBackfill(day, DateTime(2026, 9, 4, 3, 59), dayEndsAt: 4),
+        isNull);
+    expect(formatBackfill(day, DateTime(2026, 9, 4, 4), dayEndsAt: 4),
+        'written a day later');
+    // Two nights on, before the cut-off, is one day later — not two.
+    expect(formatBackfill(day, DateTime(2026, 9, 5, 1), dayEndsAt: 4),
+        'written a day later');
+    // Writing the same evening is never "later", cut-off or not.
+    expect(formatBackfill(day, DateTime(2026, 9, 3, 22), dayEndsAt: 4), isNull);
+    // Filing an entry under tomorrow at 1 am does not turn into "later" either.
+    expect(formatBackfill(DateTime(2026, 9, 4), DateTime(2026, 9, 4, 1),
+        dayEndsAt: 4), isNull);
+  });
 }

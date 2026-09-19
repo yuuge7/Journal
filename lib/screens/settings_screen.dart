@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:path/path.dart' as p;
 
+import '../data/database.dart';
 import '../providers.dart';
 import '../theme/app_theme.dart';
 import '../services/backup_service.dart';
@@ -96,6 +98,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _pickDayEndsAt(int current) async {
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text('Your day ends at',
+                style: Theme.of(context).textTheme.titleMedium),
+          ),
+          Flexible(
+            child: ListView(shrinkWrap: true, children: [
+              for (var hour = 0; hour <= AppDatabase.maxDayEndsAt; hour++)
+                ListTile(
+                  title: Text(_hourLabel(hour)),
+                  selected: hour == current,
+                  trailing: hour == current ? const Icon(Icons.check) : null,
+                  onTap: () => Navigator.pop(context, hour),
+                ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+    if (picked == null || picked == current) return;
+    await ref.read(databaseProvider).setDayEndsAt(picked);
+  }
+
+  static String _hourLabel(int hour) => hour == 0
+      ? 'Midnight'
+      : DateFormat.Hm().format(DateTime(2000, 1, 1, hour));
+
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -111,12 +146,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final busy = _progress != null;
+    final dayEndsAt = ref.watch(dayEndsAtProvider).value ?? 0;
     return Scaffold(
       appBar: AppBar(
         title: Text('Settings', style: Theme.of(context).textTheme.displayLarge),
         toolbarHeight: 72,
       ),
       body: ListView(children: [
+        const _SectionHeader('Writing'),
+        ListTile(
+          leading: const Icon(Icons.bedtime_outlined),
+          title: const Text('Day ends at'),
+          subtitle: Text(dayEndsAt == 0
+              ? 'An entry for yesterday written after midnight is marked '
+                  '"written a day later". Pick a later hour if you write at night.'
+              : 'An entry for yesterday written before '
+                  '${_hourLabel(dayEndsAt)} is not marked "written a day later".'),
+          trailing: Text(_hourLabel(dayEndsAt)),
+          onTap: () => _pickDayEndsAt(dayEndsAt),
+        ),
+        const Divider(),
         const _SectionHeader('Backup'),
         ListTile(
           leading: const Icon(Icons.upload_outlined),

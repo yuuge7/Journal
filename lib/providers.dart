@@ -81,3 +81,11 @@ final globalStatsProvider = StreamProvider<GlobalStats>(
 
 final activityProvider = StreamProvider<List<DayCount>>(
     (ref) => ref.watch(databaseProvider).watchLast30DaysActivity());
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// Hour until which writing still counts as the previous day. 0 = midnight.
+final dayEndsAtProvider =
+    StreamProvider<int>((ref) => ref.watch(databaseProvider).watchDayEndsAt());

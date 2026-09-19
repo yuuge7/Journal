@@ -46,7 +46,8 @@ class EntryRow extends ConsumerWidget {
     final journal = journals.where((j) => j.id == entry.journalId).firstOrNull;
 
     final preview = entry.plainText.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final backfill = formatBackfill(entry.entryDate, entry.createdAt);
+    final backfill = formatBackfill(entry.entryDate, entry.createdAt,
+        dayEndsAt: ref.watch(dayEndsAtProvider).value ?? 0);
     final hasTitle = entry.title.trim().isNotEmpty;
 
     return Semantics(

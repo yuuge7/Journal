@@ -56,8 +56,16 @@ String formatGap(int days) {
 ///
 /// Counted with [dayOrdinal], never `Duration.inDays`: a DST changeover makes a
 /// calendar day 23 hours long and `inDays` would report it as zero.
-String? formatBackfill(DateTime entryDay, DateTime writtenDay) {
-  final days = dayOrdinal(writtenDay) - dayOrdinal(entryDay);
+///
+/// [dayEndsAt] is the user's "day ends at" hour: anything written before that
+/// hour still belongs to the previous day, so tonight's entry finished at 2 am
+/// is not "a day later". Compared on the wall-clock hour rather than by
+/// subtracting a Duration, which a DST switch would shift by an hour.
+String? formatBackfill(DateTime entryDay, DateTime writtenAt,
+    {int dayEndsAt = 0}) {
+  final writtenDay =
+      dayOrdinal(writtenAt) - (writtenAt.hour < dayEndsAt ? 1 : 0);
+  final days = writtenDay - dayOrdinal(entryDay);
   if (days < 1) return null;
   if (days == 1) return 'written a day later';
   if (days < 31) return 'written $days days later';
