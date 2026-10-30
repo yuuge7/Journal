@@ -22,8 +22,41 @@ env:
   JAVA_VERSION: "21"
 
 jobs:
+  goldens:
+    name: Visual regression (Windows)
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # The committed baselines use Windows font rendering. Keep comparisons on
+    # the same OS and Flutter version used to generate them.
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Test golden images
+        run: flutter test --tags golden
+
+      - name: Preserve golden comparison images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures
+          path: test/**/failures/**
+          if-no-files-found: ignore
+
   release:
     name: Build and publish
+    needs: goldens
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
 
@@ -60,10 +93,10 @@ jobs:
         run: flutter analyze
 
       - name: Test
-        run: flutter test
+        run: flutter test --exclude-tags golden
 
       - name: Test at large text scale
-        run: flutter test --dart-define=TEST_TEXT_SCALE=2
+        run: flutter test --exclude-tags golden --dart-define=TEST_TEXT_SCALE=2
 
       - name: Decide the next version
         id: version

@@ -1,10 +1,13 @@
+@Tags(['golden'])
+library;
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:journal/data/database.dart';
+import 'package:journal/data/database.dart' show AppDatabase, EntriesCompanion;
 import 'package:journal/providers.dart';
 import 'package:journal/theme/app_theme.dart';
 import 'package:journal/widgets/entry_row.dart';
@@ -27,6 +30,9 @@ void main() {
           journalId: journal,
           contentJson: '[]',
           entryDate: DateTime(2026, 10, 30),
+          // Keep the backfill label independent of the day the test runs.
+          createdAt: Value(DateTime(2026, 10, 30, 15)),
+          updatedAt: Value(DateTime(2026, 10, 30, 15)),
           title: const Value('A quiet afternoon'),
           plainText: const Value(
             'The light stayed a little longer today. I took the long way home.',

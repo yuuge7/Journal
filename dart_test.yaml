@@ -1,0 +1,3 @@
+# Pixel baselines are compared in the Windows CI job.
+tags:
+  golden:

@@ -149,6 +149,7 @@ flutter test --dart-define=TEST_TEXT_SCALE=2                # large-text CI pass
 flutter test integration_test/app_test.dart -d emulator-5554 # real Android flows
 flutter test test/streak_test.dart                         # one file
 flutter test --plain-name 'streak'                         # one test
+flutter test --exclude-tags golden                         # host suite without Windows goldens
 dart run build_runner build   # drift codegen, after any schema change
 flutter build apk --release                                # release APK
 dart run flutter_launcher_icons                            # after changing assets/icon/*.png
@@ -157,6 +158,8 @@ dart run flutter_launcher_icons                            # after changing asse
 `lib/data/database.g.dart` is generated. Never edit it by hand — change `lib/data/database.dart` and re-run build_runner.
 
 Tests run on the host machine and use a real in-memory SQLite database (`AppDatabase.withExecutor(NativeDatabase.memory())`), so day bucketing, streaks and calendar queries are covered against actual SQL rather than mocks.
+
+The golden images in `test/goldens/` are generated on Windows with Flutter 3.47.0. Fonts render differently across operating systems, so CI compares them in a dedicated Windows job and runs the remaining tests on Linux. On Linux or macOS, use `--exclude-tags golden` for both host-suite commands above. After an intentional visual change, run `flutter test test/visual_test.dart --update-goldens` on Windows with the pinned SDK, review the images, and commit them. Failed CI comparisons are saved in the `golden-failures` workflow artifact; a failed golden test blocks the release.
 
 Android UI screenshots can be collected with `flutter drive --driver test_driver/integration_test.dart --target integration_test/app_test.dart -d emulator-5554`; they are written to `build/qa/`. Grant microphone and notification permissions on the test emulator when requested. The flow also injects a failed write to verify the retry indicator and that Back preserves unsaved writing.
 
