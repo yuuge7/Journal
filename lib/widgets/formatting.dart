@@ -1,6 +1,36 @@
 import 'package:intl/intl.dart';
+import 'package:flutter/material.dart';
 
 import '../data/database.dart';
+
+String entryPreview(String plainText, {String query = ''}) {
+  final normalized = plainText.replaceAll(RegExp(r'\s+'), ' ').trim();
+  final index = query.trim().isEmpty
+      ? -1
+      : normalized.toLowerCase().indexOf(query.trim().toLowerCase());
+  return index > 45 ? '…${normalized.substring(index - 35)}' : normalized;
+}
+
+TextSpan highlightedPreview(
+  String text,
+  String query,
+  Color highlight,
+  Color ink,
+) {
+  final term = query.trim();
+  final i = term.isEmpty ? -1 : text.toLowerCase().indexOf(term.toLowerCase());
+  if (i < 0) return TextSpan(text: text);
+  return TextSpan(
+    children: [
+      TextSpan(text: text.substring(0, i)),
+      TextSpan(
+        text: text.substring(i, i + term.length),
+        style: TextStyle(backgroundColor: highlight, color: ink),
+      ),
+      TextSpan(text: text.substring(i + term.length)),
+    ],
+  );
+}
 
 /// Every number the app prints goes through here, so "18 min" never appears as
 /// "18m" on one screen and "0h 18m" on another.
@@ -26,7 +56,8 @@ String formatTotalTime(int seconds) {
 }
 
 /// `1 word`, not `1 words`.
-String formatWords(int words) => words == 1 ? '1 word' : '${formatNumber(words)} words';
+String formatWords(int words) =>
+    words == 1 ? '1 word' : '${formatNumber(words)} words';
 
 /// Thousands are separated with a thin space, not a comma.
 ///
@@ -61,8 +92,11 @@ String formatGap(int days) {
 /// hour still belongs to the previous day, so tonight's entry finished at 2 am
 /// is not "a day later". Compared on the wall-clock hour rather than by
 /// subtracting a Duration, which a DST switch would shift by an hour.
-String? formatBackfill(DateTime entryDay, DateTime writtenAt,
-    {int dayEndsAt = 0}) {
+String? formatBackfill(
+  DateTime entryDay,
+  DateTime writtenAt, {
+  int dayEndsAt = 0,
+}) {
   final writtenDay =
       dayOrdinal(writtenAt) - (writtenAt.hour < dayEndsAt ? 1 : 0);
   final days = writtenDay - dayOrdinal(entryDay);

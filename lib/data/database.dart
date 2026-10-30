@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 part 'database.g.dart';
 
@@ -14,6 +15,9 @@ class Journals extends Table {
   IntColumn get color => integer()(); // ARGB value of the accent color
   TextColumn get emoji => text().withDefault(const Constant('📔'))();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  BoolColumn get archived => boolean().withDefault(const Constant(false))();
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
 }
 
 class Entries extends Table {
@@ -42,6 +46,10 @@ class Entries extends Table {
   IntColumn get mood => integer().nullable()();
 
   BoolColumn get isDraft => boolean().withDefault(const Constant(false))();
+  TextColumn get stableId => text().withDefault(const Constant(''))();
+  TextColumn get monthDay => text().withDefault(const Constant(''))();
+  TextColumn get location => text().nullable()();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
 }
 
 class Tags extends Table {
@@ -111,7 +119,7 @@ DateTime localDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 /// `inDays` report 0 for two genuinely consecutive days.
 int dayOrdinal(DateTime dt) =>
     DateTime.utc(dt.year, dt.month, dt.day).millisecondsSinceEpoch ~/
-        Duration.millisecondsPerDay;
+    Duration.millisecondsPerDay;
 
 /// Current and longest run of consecutive days that have at least one entry.
 ///
@@ -120,7 +128,8 @@ int dayOrdinal(DateTime dt) =>
 /// today or yesterday.
 StreakInfo computeStreaks(Iterable<DateTime> entryDates, {DateTime? now}) {
   final today = dayOrdinal(now ?? DateTime.now());
-  final days = <int>{for (final d in entryDates) dayOrdinal(d)}.toList()..sort();
+  final days = <int>{for (final d in entryDates) dayOrdinal(d)}.toList()
+    ..sort();
   if (days.isEmpty) return const StreakInfo(current: 0, longest: 0);
 
   var longest = 1, run = 1;
@@ -172,12 +181,32 @@ class GlobalStats {
   });
 }
 
+/// Analytics never materialize the prose or rich-text documents.
+class EntryInsight {
+  const EntryInsight({
+    required this.id,
+    required this.journalId,
+    required this.title,
+    required this.entryDate,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.wordCount,
+    required this.writingSeconds,
+    required this.mood,
+  });
+  final int id, journalId, wordCount, writingSeconds;
+  final String title;
+  final DateTime entryDate, createdAt, updatedAt;
+  final int? mood;
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
 @DriftDatabase(
-    tables: [Journals, Entries, Tags, EntryTags, Attachments, Settings])
+  tables: [Journals, Entries, Tags, EntryTags, Attachments, Settings],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'journal'));
 
@@ -185,26 +214,109 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.withExecutor(super.e);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async {
-          await m.createAll();
-          // Seed a default journal so the editor always has a target.
-          await into(journals).insert(JournalsCompanion.insert(
-            name: 'Personal',
-            color: 0xFF6750A4,
-            emoji: const Value('📔'),
-          ));
-        },
-        onUpgrade: (m, from, to) async {
-          if (from < 2) await _repairWordCounts();
-          if (from < 3) await m.createTable(settings);
-        },
-        beforeOpen: (details) async {
-          await customStatement('PRAGMA foreign_keys = ON');
-        },
+    onCreate: (m) async {
+      await m.createAll();
+      await _createSearch();
+      // Seed a default journal so the editor always has a target.
+      await into(journals).insert(
+        JournalsCompanion.insert(
+          name: 'Personal',
+          color: 0xFF7A6BB5,
+          emoji: const Value('📔'),
+        ),
+      );
+    },
+    onUpgrade: (m, from, to) async {
+      if (from < 2) await _repairWordCounts();
+      if (from < 3) {
+        await customStatement(
+          'CREATE TABLE IF NOT EXISTS settings (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)',
+        );
+      }
+      if (from < 4) {
+        final journalColumns = (await customSelect(
+          'PRAGMA table_info(journals)',
+        ).get()).map((r) => r.read<String>('name')).toSet();
+        final entryColumns = (await customSelect(
+          'PRAGMA table_info(entries)',
+        ).get()).map((r) => r.read<String>('name')).toSet();
+        for (final column in [
+          journals.archived,
+          journals.sortOrder,
+          journals.deletedAt,
+        ]) {
+          if (!journalColumns.contains(column.$name)) {
+            await m.addColumn(journals, column);
+          }
+        }
+        for (final column in [
+          entries.stableId,
+          entries.monthDay,
+          entries.location,
+          entries.deletedAt,
+        ]) {
+          if (!entryColumns.contains(column.$name)) {
+            await m.addColumn(entries, column);
+          }
+        }
+        for (final e in await select(entries).get()) {
+          await (update(entries)..where((t) => t.id.equals(e.id))).write(
+            EntriesCompanion(
+              stableId: Value(
+                e.stableId.isEmpty ? const Uuid().v4() : e.stableId,
+              ),
+              monthDay: Value(monthDayOf(e.entryDate)),
+            ),
+          );
+        }
+        await _createSearch();
+      }
+    },
+    beforeOpen: (details) async {
+      await customStatement('PRAGMA foreign_keys = ON');
+    },
+  );
+
+  static String monthDayOf(DateTime day) =>
+      '${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+  Future<void> _createSearch() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS entries_entry_date ON entries(entry_date)',
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS entries_stable_id ON entries(stable_id) WHERE stable_id != \'\'',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS entries_month_day ON entries(month_day)',
+    );
+    await customStatement(
+      'CREATE VIRTUAL TABLE IF NOT EXISTS entry_search USING fts5(title, plain_text, content=entries, content_rowid=id, tokenize="unicode61 remove_diacritics 2")',
+    );
+    await customStatement(
+      "CREATE TRIGGER IF NOT EXISTS entries_fts_insert AFTER INSERT ON entries BEGIN INSERT INTO entry_search(rowid,title,plain_text) VALUES(new.id,new.title,new.plain_text); END",
+    );
+    await customStatement(
+      "CREATE TRIGGER IF NOT EXISTS entries_fts_delete AFTER DELETE ON entries BEGIN INSERT INTO entry_search(entry_search,rowid,title,plain_text) VALUES('delete',old.id,old.title,old.plain_text); END",
+    );
+    await customStatement(
+      "CREATE TRIGGER IF NOT EXISTS entries_fts_update AFTER UPDATE ON entries BEGIN INSERT INTO entry_search(entry_search,rowid,title,plain_text) VALUES('delete',old.id,old.title,old.plain_text); INSERT INTO entry_search(rowid,title,plain_text) VALUES(new.id,new.title,new.plain_text); END",
+    );
+    await customStatement(
+      "INSERT INTO entry_search(entry_search) VALUES('rebuild')",
+    );
+  }
+
+  Expression<bool> _visible($EntriesTable e) =>
+      e.deletedAt.isNull() &
+      e.journalId.isInQuery(
+        selectOnly(journals)
+          ..addColumns([journals.id])
+          ..where(journals.deletedAt.isNull()),
       );
 
   /// Recomputes every stored word count from the plain-text mirror.
@@ -216,42 +328,74 @@ class AppDatabase extends _$AppDatabase {
   /// showed however much was written. `plainText` was always written from the
   /// live document, so it is the trustworthy side of the pair.
   Future<void> _repairWordCounts() async {
-    final rows = await select(entries).get();
-    final stale = [
-      for (final e in rows)
-        if (countWords(e.plainText) != e.wordCount) e
-    ];
-    if (stale.isEmpty) return;
-    await batch((b) {
-      for (final e in stale) {
-        b.update(
-          entries,
-          EntriesCompanion(wordCount: Value(countWords(e.plainText))),
-          where: (t) => t.id.equals(e.id),
+    final rows = await customSelect(
+      'SELECT id, plain_text, word_count FROM entries',
+    ).get();
+    for (final row in rows) {
+      final words = countWords(row.read<String>('plain_text'));
+      if (words != row.read<int>('word_count')) {
+        await customUpdate(
+          'UPDATE entries SET word_count = ? WHERE id = ?',
+          variables: [Variable(words), Variable(row.read<int>('id'))],
         );
       }
-    });
+    }
   }
 
   // -------------------------------------------------------------------------
   // Journals
   // -------------------------------------------------------------------------
 
-  Stream<List<Journal>> watchJournals() =>
-      (select(journals)..orderBy([(j) => OrderingTerm.asc(j.createdAt)]))
+  Stream<List<Journal>> watchJournals({bool includeArchived = false}) =>
+      (select(journals)
+            ..where(
+              (j) =>
+                  j.deletedAt.isNull() &
+                  (includeArchived
+                      ? const Constant(true)
+                      : j.archived.equals(false)),
+            )
+            ..orderBy([
+              (j) => OrderingTerm.asc(j.sortOrder),
+              (j) => OrderingTerm.asc(j.createdAt),
+            ]))
           .watch();
 
   Future<int> createJournal(String name, int color, String emoji) =>
-      into(journals).insert(JournalsCompanion.insert(
-          name: name, color: color, emoji: Value(emoji)));
+      into(journals).insert(
+        JournalsCompanion.insert(name: name, color: color, emoji: Value(emoji)),
+      );
 
   Future<void> renameJournal(int id, String name, int color, String emoji) =>
       (update(journals)..where((j) => j.id.equals(id))).write(
-          JournalsCompanion(
-              name: Value(name), color: Value(color), emoji: Value(emoji)));
+        JournalsCompanion(
+          name: Value(name),
+          color: Value(color),
+          emoji: Value(emoji),
+        ),
+      );
 
   Future<void> deleteJournal(int id) =>
-      (delete(journals)..where((j) => j.id.equals(id))).go();
+      (update(journals)..where((j) => j.id.equals(id))).write(
+        JournalsCompanion(deletedAt: Value(DateTime.now())),
+      );
+  Future<void> restoreJournal(int id) =>
+      (update(journals)..where((j) => j.id.equals(id))).write(
+        const JournalsCompanion(deletedAt: Value(null)),
+      );
+  Future<void> archiveJournal(int id, bool archived) =>
+      (update(journals)..where((j) => j.id.equals(id))).write(
+        JournalsCompanion(archived: Value(archived)),
+      );
+  Future<void> reorderJournals(List<int> ids) => batch((b) {
+    for (var i = 0; i < ids.length; i++) {
+      b.update(
+        journals,
+        JournalsCompanion(sortOrder: Value(i)),
+        where: (j) => j.id.equals(ids[i]),
+      );
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Entries
@@ -259,15 +403,62 @@ class AppDatabase extends _$AppDatabase {
 
   /// Chronological feed, newest first. Optional journal filter and full-text
   /// search over title + plain text.
-  Stream<List<Entry>> watchFeed({int? journalId, String? search}) {
+  Stream<List<Entry>> watchFeed({
+    int? journalId,
+    String? search,
+    bool titlesOnly = false,
+    int? year,
+    int limit = 200,
+    DateTime? before,
+  }) {
     final q = select(entries)
-      ..orderBy([(e) => OrderingTerm.desc(e.entryDate)]);
+      ..where(_visible)
+      ..orderBy([
+        (e) => OrderingTerm.desc(e.entryDate),
+        (e) => OrderingTerm.desc(e.id),
+      ])
+      ..limit(limit);
+    if (before != null) {
+      q.where((e) => e.entryDate.isSmallerOrEqualValue(before));
+    }
+    if (year != null) {
+      q.where(
+        (e) =>
+            e.entryDate.isBiggerOrEqualValue(DateTime(year)) &
+            e.entryDate.isSmallerThanValue(DateTime(year + 1)),
+      );
+    }
     if (journalId != null) {
       q.where((e) => e.journalId.equals(journalId));
     }
     if (search != null && search.trim().isNotEmpty) {
-      final like = '%${search.trim()}%';
-      q.where((e) => e.title.like(like) | e.plainText.like(like));
+      final terms = RegExp(
+        r'[\p{L}\p{N}_]+',
+        unicode: true,
+      ).allMatches(search).map((m) => '"${m[0]}"*').join(' AND ');
+      if (terms.isNotEmpty) {
+        final fts = titlesOnly ? 'title : ($terms)' : terms;
+        final escapedFts = fts.replaceAll("'", "''");
+        final tagTerm = search
+            .trim()
+            .replaceFirst(RegExp(r'^#'), '')
+            .replaceAll("'", "''");
+        q.where(
+          (e) =>
+              CustomExpression<bool>(
+                "entries.id IN (SELECT rowid FROM entry_search WHERE entry_search MATCH '$escapedFts')",
+                watchedTables: [entries],
+              ) |
+              (titlesOnly
+                  ? const Constant(false)
+                  : CustomExpression<bool>(
+                      "entries.id IN (SELECT entry_id FROM entry_tags JOIN tags ON tags.id = entry_tags.tag_id WHERE tags.name LIKE '%$tagTerm%')",
+                      watchedTables: [tags, entryTags],
+                    )),
+        );
+      } else {
+        q.where((e) => e.id.equals(-1));
+      }
     }
     return q.watch();
   }
@@ -275,14 +466,148 @@ class AppDatabase extends _$AppDatabase {
   Future<Entry?> getEntry(int id) =>
       (select(entries)..where((e) => e.id.equals(id))).getSingleOrNull();
 
-  Future<int> insertEntry(EntriesCompanion companion) =>
-      into(entries).insert(companion);
+  Future<Entry?> getEntryByStableId(String id) => (select(
+    entries,
+  )..where((e) => _visible(e) & e.stableId.equals(id))).getSingleOrNull();
+
+  Stream<Entry?> watchLatestDraft() =>
+      (select(entries)
+            ..where((e) => _visible(e) & e.isDraft.equals(true))
+            ..orderBy([(e) => OrderingTerm.desc(e.updatedAt)])
+            ..limit(1))
+          .watchSingleOrNull();
+
+  Future<int> insertEntry(EntriesCompanion companion) => into(entries).insert(
+    companion.copyWith(
+      stableId:
+          companion.stableId.present && companion.stableId.value.isNotEmpty
+          ? companion.stableId
+          : Value(const Uuid().v4()),
+      monthDay: companion.entryDate.present
+          ? Value(monthDayOf(companion.entryDate.value))
+          : companion.monthDay,
+    ),
+  );
 
   Future<void> updateEntry(int id, EntriesCompanion companion) =>
-      (update(entries)..where((e) => e.id.equals(id))).write(companion);
+      (update(entries)..where((e) => e.id.equals(id))).write(
+        companion.entryDate.present
+            ? companion.copyWith(
+                monthDay: Value(monthDayOf(companion.entryDate.value)),
+              )
+            : companion,
+      );
 
   Future<void> deleteEntry(int id) =>
-      (delete(entries)..where((e) => e.id.equals(id))).go();
+      (update(entries)..where((e) => e.id.equals(id))).write(
+        EntriesCompanion(deletedAt: Value(DateTime.now())),
+      );
+  Future<void> restoreEntry(int id) =>
+      (update(entries)..where((e) => e.id.equals(id))).write(
+        const EntriesCompanion(deletedAt: Value(null)),
+      );
+  Stream<List<Entry>> watchBin() =>
+      (select(entries)
+            ..where((e) => e.deletedAt.isNotNull())
+            ..orderBy([(e) => OrderingTerm.desc(e.deletedAt)]))
+          .watch();
+  Stream<List<Journal>> watchDeletedJournals() =>
+      (select(journals)..where((j) => j.deletedAt.isNotNull())).watch();
+  Future<void> purgeBin({bool all = false}) => transaction(() async {
+    final cutoff = DateTime.now().subtract(const Duration(days: 30));
+    await (delete(entries)..where(
+          (e) =>
+              e.deletedAt.isNotNull() &
+              (all
+                  ? const Constant(true)
+                  : e.deletedAt.isSmallerThanValue(cutoff)),
+        ))
+        .go();
+    await (delete(journals)..where(
+          (j) =>
+              j.deletedAt.isNotNull() &
+              (all
+                  ? const Constant(true)
+                  : j.deletedAt.isSmallerThanValue(cutoff)),
+        ))
+        .go();
+  });
+  Future<void> bulkMove(Set<int> ids, int journalId) =>
+      (update(entries)..where((e) => e.id.isIn(ids))).write(
+        EntriesCompanion(journalId: Value(journalId)),
+      );
+  Future<void> bulkTag(Set<int> ids, String name) => transaction(() async {
+    final tag = await ensureTag(name);
+    for (final id in ids) {
+      await into(entryTags).insert(
+        EntryTagsCompanion.insert(entryId: id, tagId: tag),
+        mode: InsertMode.insertOrIgnore,
+      );
+    }
+  });
+
+  Stream<List<EntryInsight>> watchInsights() {
+    final q = selectOnly(entries)
+      ..addColumns([
+        entries.id,
+        entries.journalId,
+        entries.title,
+        entries.entryDate,
+        entries.createdAt,
+        entries.updatedAt,
+        entries.wordCount,
+        entries.writingSeconds,
+        entries.mood,
+      ])
+      ..where(_visible(entries) & entries.isDraft.equals(false))
+      ..orderBy([OrderingTerm.asc(entries.entryDate)]);
+    return q.watch().map(
+      (rows) => [
+        for (final r in rows)
+          EntryInsight(
+            id: r.read(entries.id)!,
+            journalId: r.read(entries.journalId)!,
+            title: r.read(entries.title)!,
+            entryDate: r.read(entries.entryDate)!,
+            createdAt: r.read(entries.createdAt)!,
+            updatedAt: r.read(entries.updatedAt)!,
+            wordCount: r.read(entries.wordCount)!,
+            writingSeconds: r.read(entries.writingSeconds)!,
+            mood: r.read(entries.mood),
+          ),
+      ],
+    );
+  }
+
+  Stream<Map<DateTime, int>> watchHeat(int year) {
+    final q = selectOnly(entries)
+      ..addColumns([entries.entryDate, entries.writingSeconds])
+      ..where(
+        _visible(entries) &
+            entries.isDraft.equals(false) &
+            entries.entryDate.isBiggerOrEqualValue(DateTime(year)) &
+            entries.entryDate.isSmallerThanValue(DateTime(year + 1)),
+      );
+    return q.watch().map((rows) {
+      final result = <DateTime, int>{};
+      for (final row in rows) {
+        final day = localDay(row.read(entries.entryDate)!);
+        final seconds = row.read(entries.writingSeconds)!;
+        result.update(day, (s) => s + seconds, ifAbsent: () => seconds);
+      }
+      return result;
+    });
+  }
+
+  Future<String?> setting(String key) async => (await (select(
+    settings,
+  )..where((s) => s.key.equals(key))).getSingleOrNull())?.value;
+  Stream<String?> watchSetting(String key) => (select(
+    settings,
+  )..where((s) => s.key.equals(key))).watchSingleOrNull().map((s) => s?.value);
+  Future<void> setSetting(String key, String value) => into(
+    settings,
+  ).insertOnConflictUpdate(SettingsCompanion.insert(key: key, value: value));
 
   // -------------------------------------------------------------------------
   // Tags
@@ -293,9 +618,11 @@ class AppDatabase extends _$AppDatabase {
 
   /// Map of entryId -> tags, kept as one stream so the feed needs a single
   /// subscription instead of one per card.
-  Stream<Map<int, List<Tag>>> watchTagsByEntry() {
-    final query = select(entryTags).join(
-        [innerJoin(tags, tags.id.equalsExp(entryTags.tagId))]);
+  Stream<Map<int, List<Tag>>> watchTagsByEntry({List<int>? entryIds}) {
+    final query = select(
+      entryTags,
+    ).join([innerJoin(tags, tags.id.equalsExp(entryTags.tagId))]);
+    if (entryIds != null) query.where(entryTags.entryId.isIn(entryIds));
     return query.watch().map((rows) {
       final map = <int, List<Tag>>{};
       for (final row in rows) {
@@ -308,25 +635,28 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> ensureTag(String name) async {
-    final existing = await (select(tags)
-          ..where((t) => t.name.equals(name.trim())))
-        .getSingleOrNull();
+    final existing = await (select(
+      tags,
+    )..where((t) => t.name.equals(name.trim()))).getSingleOrNull();
     if (existing != null) return existing.id;
     return into(tags).insert(TagsCompanion.insert(name: name.trim()));
   }
 
-  Future<void> setEntryTags(int entryId, List<int> tagIds) => transaction(() async {
-        await (delete(entryTags)..where((et) => et.entryId.equals(entryId))).go();
-        for (final tagId in tagIds) {
-          await into(entryTags)
-              .insert(EntryTagsCompanion.insert(entryId: entryId, tagId: tagId));
-        }
-      });
+  Future<void> setEntryTags(int entryId, List<int> tagIds) => transaction(
+    () async {
+      await (delete(entryTags)..where((et) => et.entryId.equals(entryId))).go();
+      for (final tagId in tagIds) {
+        await into(
+          entryTags,
+        ).insert(EntryTagsCompanion.insert(entryId: entryId, tagId: tagId));
+      }
+    },
+  );
 
   Future<List<Tag>> tagsForEntry(int entryId) async {
-    final query = select(entryTags).join(
-        [innerJoin(tags, tags.id.equalsExp(entryTags.tagId))])
-      ..where(entryTags.entryId.equals(entryId));
+    final query = select(entryTags).join([
+      innerJoin(tags, tags.id.equalsExp(entryTags.tagId)),
+    ])..where(entryTags.entryId.equals(entryId));
     final rows = await query.get();
     return rows.map((r) => r.readTable(tags)).toList();
   }
@@ -345,8 +675,17 @@ class AppDatabase extends _$AppDatabase {
       (select(attachments)..where((a) => a.entryId.equals(entryId))).get();
 
   /// entryId -> first attachment file name; used for feed thumbnails.
-  Stream<Map<int, String>> watchThumbnails() {
-    return select(attachments).watch().map((rows) {
+  Stream<Map<int, String>> watchThumbnails({List<int>? entryIds}) {
+    final q = select(attachments)
+      ..where(
+        (a) =>
+            a.fileName.like('%.jpg') |
+            a.fileName.like('%.jpeg') |
+            a.fileName.like('%.png') |
+            a.fileName.like('%.webp'),
+      );
+    if (entryIds != null) q.where((a) => a.entryId.isIn(entryIds));
+    return q.watch().map((rows) {
       final map = <int, String>{};
       for (final a in rows) {
         map.putIfAbsent(a.entryId, () => a.fileName);
@@ -355,8 +694,9 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
-  Future<int> addAttachment(int entryId, String fileName) => into(attachments)
-      .insert(AttachmentsCompanion.insert(entryId: entryId, fileName: fileName));
+  Future<int> addAttachment(int entryId, String fileName) => into(
+    attachments,
+  ).insert(AttachmentsCompanion.insert(entryId: entryId, fileName: fileName));
 
   Future<void> removeAttachment(int id) =>
       (delete(attachments)..where((a) => a.id.equals(id))).go();
@@ -372,15 +712,19 @@ class AppDatabase extends _$AppDatabase {
   /// setting existed.
   static const maxDayEndsAt = 11;
 
-  Stream<int> watchDayEndsAt() => (select(settings)
-        ..where((s) => s.key.equals(_dayEndsAtKey)))
-      .watchSingleOrNull()
-      .map((row) =>
-          (int.tryParse(row?.value ?? '') ?? 0).clamp(0, maxDayEndsAt));
+  Stream<int> watchDayEndsAt() =>
+      (select(
+        settings,
+      )..where((s) => s.key.equals(_dayEndsAtKey))).watchSingleOrNull().map(
+        (row) => (int.tryParse(row?.value ?? '') ?? 0).clamp(0, maxDayEndsAt),
+      );
 
   Future<void> setDayEndsAt(int hour) => into(settings).insertOnConflictUpdate(
-      SettingsCompanion.insert(
-          key: _dayEndsAtKey, value: '${hour.clamp(0, maxDayEndsAt)}'));
+    SettingsCompanion.insert(
+      key: _dayEndsAtKey,
+      value: '${hour.clamp(0, maxDayEndsAt)}',
+    ),
+  );
 
   // -------------------------------------------------------------------------
   // Throwback / "On this day"
@@ -388,7 +732,6 @@ class AppDatabase extends _$AppDatabase {
 
   /// How many years back "on this day" looks. Well past a lifetime of
   /// journaling, and the date picker cannot reach further than year 2000.
-  static const _throwbackYears = 60;
 
   /// Entries from previous years whose entryDate falls on the same day + month
   /// as [today].
@@ -396,24 +739,40 @@ class AppDatabase extends _$AppDatabase {
   /// Matching is a union of local-midnight day ranges, one per past year, so
   /// the comparison stays in local time and DST cannot shift a day.
   Stream<List<Entry>> watchThrowback(DateTime today) {
-    Expression<bool>? sameDay;
-    for (var year = today.year - 1;
-        year >= today.year - _throwbackYears;
-        year--) {
-      final start = DateTime(year, today.month, today.day);
-      // Feb 29 rolls into Mar 1 in a common year — that year has no such day.
-      if (start.month != today.month) continue;
-      final end = DateTime(year, today.month, today.day + 1);
-      final range = entries.entryDate.isBiggerOrEqualValue(start) &
-          entries.entryDate.isSmallerThanValue(end);
-      sameDay = sameDay == null ? range : sameDay | range;
-    }
-    if (sameDay == null) return Stream.value(const []);
-
     return (select(entries)
-          ..where((e) => e.isDraft.equals(false) & sameDay!)
+          ..where(
+            (e) =>
+                _visible(e) &
+                e.isDraft.equals(false) &
+                e.monthDay.equals(monthDayOf(today)) &
+                e.entryDate.isSmallerThanValue(DateTime(today.year)),
+          )
           ..orderBy([(e) => OrderingTerm.desc(e.entryDate)]))
         .watch();
+  }
+
+  Stream<List<Entry>> watchMemories(String kind) {
+    final now = DateTime.now();
+    final q = select(entries)
+      ..where((e) => _visible(e) & e.isDraft.equals(false));
+    if (kind == 'first') {
+      q.orderBy([(e) => OrderingTerm.asc(e.entryDate)]);
+      q.limit(1);
+    } else {
+      final start = DateTime(
+        now.year - 1,
+        now.month,
+        now.day - (now.weekday - 1),
+      );
+      final end = DateTime(start.year, start.month, start.day + 7);
+      q.where(
+        (e) =>
+            e.entryDate.isBiggerOrEqualValue(start) &
+            e.entryDate.isSmallerThanValue(end),
+      );
+      q.orderBy([(e) => OrderingTerm.desc(e.entryDate)]);
+    }
+    return q.watch();
   }
 
   // -------------------------------------------------------------------------
@@ -425,10 +784,11 @@ class AppDatabase extends _$AppDatabase {
   Stream<Map<DateTime, int>> watchMonthCounts(DateTime month) {
     final first = DateTime(month.year, month.month, 1);
     final last = DateTime(month.year, month.month + 1, 1);
-    return _watchEntryDates((e) =>
-            e.entryDate.isBiggerOrEqualValue(first) &
-            e.entryDate.isSmallerThanValue(last))
-        .map((dates) {
+    return _watchEntryDates(
+      (e) =>
+          e.entryDate.isBiggerOrEqualValue(first) &
+          e.entryDate.isSmallerThanValue(last),
+    ).map((dates) {
       final map = <DateTime, int>{};
       for (final date in dates) {
         map.update(localDay(date), (c) => c + 1, ifAbsent: () => 1);
@@ -443,10 +803,13 @@ class AppDatabase extends _$AppDatabase {
     final start = DateTime(day.year, day.month, day.day);
     final end = DateTime(day.year, day.month, day.day + 1);
     return (select(entries)
-          ..where((e) =>
-              e.isDraft.equals(false) &
-              e.entryDate.isBiggerOrEqualValue(start) &
-              e.entryDate.isSmallerThanValue(end))
+          ..where(
+            (e) =>
+                _visible(e) &
+                e.isDraft.equals(false) &
+                e.entryDate.isBiggerOrEqualValue(start) &
+                e.entryDate.isSmallerThanValue(end),
+          )
           ..orderBy([(e) => OrderingTerm.desc(e.entryDate)]))
         .watch();
   }
@@ -457,13 +820,18 @@ class AppDatabase extends _$AppDatabase {
 
   /// entryDates of every non-draft entry, optionally narrowed by [filter].
   /// Only the date column is read, so bucketing in Dart stays cheap.
-  Stream<List<DateTime>> _watchEntryDates(
-      [Expression<bool> Function($EntriesTable e)? filter]) {
+  Stream<List<DateTime>> _watchEntryDates([
+    Expression<bool> Function($EntriesTable e)? filter,
+  ]) {
     final q = selectOnly(entries)..addColumns([entries.entryDate]);
-    q.where(entries.isDraft.equals(false) &
-        (filter == null ? const Constant(true) : filter(entries)));
+    q.where(
+      _visible(entries) &
+          entries.isDraft.equals(false) &
+          (filter == null ? const Constant(true) : filter(entries)),
+    );
     return q.watch().map(
-        (rows) => [for (final r in rows) r.read(entries.entryDate)!]);
+      (rows) => [for (final r in rows) r.read(entries.entryDate)!],
+    );
   }
 
   /// Streaks = consecutive calendar days with at least one entry.
@@ -473,11 +841,11 @@ class AppDatabase extends _$AppDatabase {
   Stream<GlobalStats> watchGlobalStats() {
     return customSelect(
       "SELECT "
-      "(SELECT COUNT(*) FROM entries WHERE is_draft = 0) AS total_entries, "
-      "(SELECT COALESCE(SUM(word_count), 0) FROM entries WHERE is_draft = 0) AS total_words, "
-      "(SELECT COALESCE(SUM(writing_seconds), 0) FROM entries WHERE is_draft = 0) AS total_seconds, "
-      "(SELECT COUNT(*) FROM attachments) AS total_attachments",
-      readsFrom: {entries, attachments},
+      "(SELECT COUNT(*) FROM entries WHERE is_draft = 0 AND deleted_at IS NULL AND journal_id IN (SELECT id FROM journals WHERE deleted_at IS NULL)) AS total_entries, "
+      "(SELECT COALESCE(SUM(word_count), 0) FROM entries WHERE is_draft = 0 AND deleted_at IS NULL AND journal_id IN (SELECT id FROM journals WHERE deleted_at IS NULL)) AS total_words, "
+      "(SELECT COALESCE(SUM(writing_seconds), 0) FROM entries WHERE is_draft = 0 AND deleted_at IS NULL AND journal_id IN (SELECT id FROM journals WHERE deleted_at IS NULL)) AS total_seconds, "
+      "(SELECT COUNT(*) FROM attachments JOIN entries ON entries.id = attachments.entry_id WHERE entries.deleted_at IS NULL AND entries.journal_id IN (SELECT id FROM journals WHERE deleted_at IS NULL)) AS total_attachments",
+      readsFrom: {entries, attachments, journals},
     ).watchSingle().map((row) {
       final totalEntries = row.read<int>('total_entries');
       final totalWords = row.read<int>('total_words');
@@ -486,8 +854,7 @@ class AppDatabase extends _$AppDatabase {
         totalWords: totalWords,
         totalWritingSeconds: row.read<int>('total_seconds'),
         totalAttachments: row.read<int>('total_attachments'),
-        avgWordsPerEntry:
-            totalEntries == 0 ? 0 : totalWords / totalEntries,
+        avgWordsPerEntry: totalEntries == 0 ? 0 : totalWords / totalEntries,
       );
     });
   }
@@ -498,10 +865,11 @@ class AppDatabase extends _$AppDatabase {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day - 29);
     final end = DateTime(now.year, now.month, now.day + 1);
-    return _watchEntryDates((e) =>
-            e.entryDate.isBiggerOrEqualValue(start) &
-            e.entryDate.isSmallerThanValue(end))
-        .map((dates) {
+    return _watchEntryDates(
+      (e) =>
+          e.entryDate.isBiggerOrEqualValue(start) &
+          e.entryDate.isSmallerThanValue(end),
+    ).map((dates) {
       final counts = <DateTime, int>{};
       for (final date in dates) {
         counts.update(localDay(date), (c) => c + 1, ifAbsent: () => 1);

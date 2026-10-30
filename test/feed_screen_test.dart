@@ -8,6 +8,7 @@ import 'package:journal/data/database.dart';
 import 'package:journal/providers.dart';
 import 'package:journal/screens/feed_screen.dart';
 import 'package:journal/theme/app_theme.dart';
+import 'package:journal/widgets/entry_row.dart';
 
 /// The feed is the screen the app lives on, and the way it breaks is silent: a
 /// layout assertion inside a sliver throws during `performLayout`, the whole
@@ -19,14 +20,25 @@ import 'package:journal/theme/app_theme.dart';
 /// database opened outside that zone never finishes closing inside it, and the
 /// run hangs with no useful message.
 void main() {
-  testWidgets('entries reach the screen, grouped under their day', (tester) async {
+  testWidgets('entries reach the screen, grouped under their day', (
+    tester,
+  ) async {
     final db = AppDatabase.withExecutor(NativeDatabase.memory());
-    await _seed(db, {0: ['Slow start', 'Ran the long loop'], 1: ['The review went fine']});
+    await _seed(db, {
+      0: ['Slow start', 'Ran the long loop'],
+      1: ['The review went fine'],
+    });
     await _pumpFeed(tester, db);
 
     expect(find.text('Slow start'), findsOneWidget);
     expect(find.text('Ran the long loop'), findsOneWidget);
-    expect(find.text('The review went fine'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(EntryRow),
+        matching: find.text('The review went fine'),
+      ),
+      findsOneWidget,
+    );
     // Today is named rather than dated, and the heading is stated once even
     // though two entries hang off it.
     expect(find.text('TODAY'), findsOneWidget);
@@ -35,16 +47,51 @@ void main() {
     await db.close();
   });
 
-  testWidgets('a run of days with nothing in it is drawn, not closed up',
-      (tester) async {
+  testWidgets('a run of days with nothing in it is drawn, not closed up', (
+    tester,
+  ) async {
     final db = AppDatabase.withExecutor(NativeDatabase.memory());
-    await _seed(db, {0: ['Today'], 4: ['Four days ago']});
+    await _seed(db, {
+      0: ['Today'],
+      4: ['Four days ago'],
+    });
     await _pumpFeed(tester, db);
 
     expect(find.text('NOTHING FOR 3 DAYS'), findsOneWidget);
 
     await db.close();
   });
+
+  testWidgets(
+    'recovery finds a backfilled draft outside the loaded feed page',
+    (tester) async {
+      final db = AppDatabase.withExecutor(NativeDatabase.memory());
+      final journal = (await db.select(db.journals).get()).first.id;
+      final draft = await db.insertEntry(
+        EntriesCompanion.insert(
+          journalId: journal,
+          title: const Value('Recovered older memory'),
+          contentJson: '[]',
+          entryDate: DateTime(2000),
+          isDraft: const Value(true),
+        ),
+      );
+      for (var i = 0; i < 205; i++) {
+        await db.insertEntry(
+          EntriesCompanion.insert(
+            journalId: journal,
+            title: Value('A later entry $i'),
+            contentJson: '[]',
+            entryDate: DateTime.now(),
+          ),
+        );
+      }
+      await _pumpFeed(tester, db);
+      expect(find.text('You left this unfinished'), findsOneWidget);
+      expect((await db.getEntry(draft))!.isDraft, true);
+      await db.close();
+    },
+  );
 
   testWidgets('an empty journal says what to do next', (tester) async {
     final db = AppDatabase.withExecutor(NativeDatabase.memory());
@@ -63,32 +110,40 @@ Future<void> _seed(AppDatabase db, Map<int, List<String>> plan) async {
   final journalId = await db.createJournal('Personal', 0xFF7A6BB5, '📔');
   for (final entry in plan.entries) {
     for (final title in entry.value) {
-      await db.insertEntry(EntriesCompanion.insert(
-        journalId: journalId,
-        title: Value(title),
-        contentJson: '[]',
-        plainText: Value('$title — the opening of the writing.'),
-        entryDate: DateTime.now().subtract(Duration(days: entry.key)),
-        wordCount: const Value(9),
-        writingSeconds: const Value(600),
-        mood: const Value(4),
-      ));
+      await db.insertEntry(
+        EntriesCompanion.insert(
+          journalId: journalId,
+          title: Value(title),
+          contentJson: '[]',
+          plainText: Value('$title — the opening of the writing.'),
+          entryDate: DateTime.now().subtract(Duration(days: entry.key)),
+          wordCount: const Value(9),
+          writingSeconds: const Value(600),
+          mood: const Value(4),
+        ),
+      );
     }
   }
 }
 
 Future<void> _pumpFeed(WidgetTester tester, AppDatabase db) async {
-  await tester.pumpWidget(ProviderScope(
-    overrides: [databaseProvider.overrideWithValue(db)],
-    child: MaterialApp(
-      theme: buildTheme(brightness: Brightness.light),
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-      ],
-      home: const FeedScreen(),
+  tester.view.physicalSize = const Size(800, 1200);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      child: MaterialApp(
+        theme: buildTheme(brightness: Brightness.light),
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+        ],
+        home: const FeedScreen(),
+      ),
     ),
-  ));
+  );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 300));
 }

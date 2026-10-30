@@ -7,6 +7,7 @@ import '../providers.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/formatting.dart';
+import '../widgets/insights_panel.dart';
 
 /// What the writing adds up to.
 ///
@@ -45,6 +46,7 @@ class StatsScreen extends ConsumerWidget {
               _Figures(stats: stats),
               const SizedBox(height: 28),
               _ActivityChart(activity: activity),
+              const InsightsPanel(),
             ],
           ],
         ),
@@ -93,7 +95,9 @@ class _StreakBlock extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   alive
-                      ? (streaks.current == 1 ? 'day in a row' : 'days in a row')
+                      ? (streaks.current == 1
+                            ? 'day in a row'
+                            : 'days in a row')
                       : 'write today to start one',
                   style: text.bodySmall,
                 ),
@@ -110,7 +114,10 @@ class _StreakBlock extends StatelessWidget {
                 style: text.displayLarge!.copyWith(fontSize: 30, height: 1),
               ),
               const SizedBox(height: 4),
-              Text(streaks.longest == 1 ? 'day' : 'days', style: text.bodySmall),
+              Text(
+                streaks.longest == 1 ? 'day' : 'days',
+                style: text.bodySmall,
+              ),
             ],
           ),
         ],
@@ -132,11 +139,17 @@ class _Figures extends StatelessWidget {
       ('Entries', '${stats.totalEntries}'),
       ('Words written', formatNumber(stats.totalWords)),
       ('Time at the page', formatTotalTime(stats.totalWritingSeconds)),
-      ('Words per entry, on average', stats.avgWordsPerEntry.round().toString()),
-      ('Photos kept', '${stats.totalAttachments}'),
+      (
+        'Words per entry, on average',
+        stats.avgWordsPerEntry.round().toString(),
+      ),
+      ('Attachments kept', '${stats.totalAttachments}'),
     ];
     return Column(
-      children: [for (final (label, value) in rows) _FigureRow(label: label, value: value)],
+      children: [
+        for (final (label, value) in rows)
+          _FigureRow(label: label, value: value),
+      ],
     );
   }
 }
@@ -159,7 +172,12 @@ class _FigureRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Expanded(child: Text(label, style: text.bodySmall!.copyWith(color: t.inkDim))),
+          Expanded(
+            child: Text(
+              label,
+              style: text.bodySmall!.copyWith(color: t.inkDim),
+            ),
+          ),
           const SizedBox(width: 16),
           Text(value, style: text.displaySmall!.copyWith(fontSize: 20)),
         ],
@@ -183,7 +201,7 @@ class _ActivityChart extends StatelessWidget {
     final today = DateTime.now();
     final days = [
       for (var i = 29; i >= 0; i--)
-        DateTime(today.year, today.month, today.day - i)
+        DateTime(today.year, today.month, today.day - i),
     ];
     final maxCount = activity.isEmpty
         ? 1
@@ -195,11 +213,14 @@ class _ActivityChart extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Text('LAST 30 DAYS', style: text.utility),
-            const Spacer(),
-            Text('$written OF 30 WRITTEN', style: text.utility),
-          ]),
+          Wrap(
+            spacing: 16,
+            runSpacing: 6,
+            children: [
+              Text('LAST 30 DAYS', style: text.utility),
+              Text('$written OF 30 WRITTEN', style: text.utility),
+            ],
+          ),
           const SizedBox(height: 12),
           SizedBox(
             height: 76,
@@ -218,10 +239,11 @@ class _ActivityChart extends StatelessWidget {
                           color: byDay[day] == null
                               ? t.hairline
                               : (dayOrdinal(day) == dayOrdinal(today)
-                                  ? t.accent
-                                  : t.spineWeight),
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(1.5)),
+                                    ? t.accent
+                                    : t.spineWeight),
+                          borderRadius: const BorderRadius.all(
+                            Radius.circular(1.5),
+                          ),
                         ),
                       ),
                     ),
@@ -230,12 +252,17 @@ class _ActivityChart extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Row(children: [
-            Text(DateFormat('d MMM').format(days.first).toUpperCase(),
-                style: text.utility),
-            const Spacer(),
-            Text('TODAY', style: text.utility.copyWith(color: t.accent)),
-          ]),
+          Wrap(
+            spacing: 16,
+            runSpacing: 6,
+            children: [
+              Text(
+                DateFormat('d MMM').format(days.first).toUpperCase(),
+                style: text.utility,
+              ),
+              Text('TODAY', style: text.utility.copyWith(color: t.accent)),
+            ],
+          ),
         ],
       ),
     );
@@ -249,11 +276,17 @@ class _StatsLoading extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(children: [
-        const SizedBox(width: 16, height: 16, child: CircularProgressIndicator()),
-        const SizedBox(width: 12),
-        Text('COUNTING', style: Theme.of(context).textTheme.utility),
-      ]),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(),
+          ),
+          const SizedBox(width: 12),
+          Text('COUNTING', style: Theme.of(context).textTheme.utility),
+        ],
+      ),
     );
   }
 }

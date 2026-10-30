@@ -65,8 +65,55 @@ class $JournalsTable extends Journals with TableInfo<$JournalsTable, Journal> {
     requiredDuringInsert: false,
     defaultValue: currentDateAndTime,
   );
+  static const VerificationMeta _archivedMeta = const VerificationMeta(
+    'archived',
+  );
   @override
-  List<GeneratedColumn> get $columns => [id, name, color, emoji, createdAt];
+  late final GeneratedColumn<bool> archived = GeneratedColumn<bool>(
+    'archived',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("archived" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    color,
+    emoji,
+    createdAt,
+    archived,
+    sortOrder,
+    deletedAt,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -110,6 +157,24 @@ class $JournalsTable extends Journals with TableInfo<$JournalsTable, Journal> {
         createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
       );
     }
+    if (data.containsKey('archived')) {
+      context.handle(
+        _archivedMeta,
+        archived.isAcceptableOrUnknown(data['archived']!, _archivedMeta),
+      );
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
     return context;
   }
 
@@ -139,6 +204,18 @@ class $JournalsTable extends Journals with TableInfo<$JournalsTable, Journal> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      archived: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}archived'],
+      )!,
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
     );
   }
 
@@ -154,12 +231,18 @@ class Journal extends DataClass implements Insertable<Journal> {
   final int color;
   final String emoji;
   final DateTime createdAt;
+  final bool archived;
+  final int sortOrder;
+  final DateTime? deletedAt;
   const Journal({
     required this.id,
     required this.name,
     required this.color,
     required this.emoji,
     required this.createdAt,
+    required this.archived,
+    required this.sortOrder,
+    this.deletedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -169,6 +252,11 @@ class Journal extends DataClass implements Insertable<Journal> {
     map['color'] = Variable<int>(color);
     map['emoji'] = Variable<String>(emoji);
     map['created_at'] = Variable<DateTime>(createdAt);
+    map['archived'] = Variable<bool>(archived);
+    map['sort_order'] = Variable<int>(sortOrder);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -179,6 +267,11 @@ class Journal extends DataClass implements Insertable<Journal> {
       color: Value(color),
       emoji: Value(emoji),
       createdAt: Value(createdAt),
+      archived: Value(archived),
+      sortOrder: Value(sortOrder),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -193,6 +286,9 @@ class Journal extends DataClass implements Insertable<Journal> {
       color: serializer.fromJson<int>(json['color']),
       emoji: serializer.fromJson<String>(json['emoji']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      archived: serializer.fromJson<bool>(json['archived']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -204,6 +300,9 @@ class Journal extends DataClass implements Insertable<Journal> {
       'color': serializer.toJson<int>(color),
       'emoji': serializer.toJson<String>(emoji),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'archived': serializer.toJson<bool>(archived),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -213,12 +312,18 @@ class Journal extends DataClass implements Insertable<Journal> {
     int? color,
     String? emoji,
     DateTime? createdAt,
+    bool? archived,
+    int? sortOrder,
+    Value<DateTime?> deletedAt = const Value.absent(),
   }) => Journal(
     id: id ?? this.id,
     name: name ?? this.name,
     color: color ?? this.color,
     emoji: emoji ?? this.emoji,
     createdAt: createdAt ?? this.createdAt,
+    archived: archived ?? this.archived,
+    sortOrder: sortOrder ?? this.sortOrder,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
   );
   Journal copyWithCompanion(JournalsCompanion data) {
     return Journal(
@@ -227,6 +332,9 @@ class Journal extends DataClass implements Insertable<Journal> {
       color: data.color.present ? data.color.value : this.color,
       emoji: data.emoji.present ? data.emoji.value : this.emoji,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      archived: data.archived.present ? data.archived.value : this.archived,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -237,13 +345,25 @@ class Journal extends DataClass implements Insertable<Journal> {
           ..write('name: $name, ')
           ..write('color: $color, ')
           ..write('emoji: $emoji, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('archived: $archived, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, color, emoji, createdAt);
+  int get hashCode => Object.hash(
+    id,
+    name,
+    color,
+    emoji,
+    createdAt,
+    archived,
+    sortOrder,
+    deletedAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -252,7 +372,10 @@ class Journal extends DataClass implements Insertable<Journal> {
           other.name == this.name &&
           other.color == this.color &&
           other.emoji == this.emoji &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.archived == this.archived &&
+          other.sortOrder == this.sortOrder &&
+          other.deletedAt == this.deletedAt);
 }
 
 class JournalsCompanion extends UpdateCompanion<Journal> {
@@ -261,12 +384,18 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
   final Value<int> color;
   final Value<String> emoji;
   final Value<DateTime> createdAt;
+  final Value<bool> archived;
+  final Value<int> sortOrder;
+  final Value<DateTime?> deletedAt;
   const JournalsCompanion({
     this.id = const Value.absent(),
     this.name = const Value.absent(),
     this.color = const Value.absent(),
     this.emoji = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.archived = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   });
   JournalsCompanion.insert({
     this.id = const Value.absent(),
@@ -274,6 +403,9 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
     required int color,
     this.emoji = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.archived = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   }) : name = Value(name),
        color = Value(color);
   static Insertable<Journal> custom({
@@ -282,6 +414,9 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
     Expression<int>? color,
     Expression<String>? emoji,
     Expression<DateTime>? createdAt,
+    Expression<bool>? archived,
+    Expression<int>? sortOrder,
+    Expression<DateTime>? deletedAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -289,6 +424,9 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
       if (color != null) 'color': color,
       if (emoji != null) 'emoji': emoji,
       if (createdAt != null) 'created_at': createdAt,
+      if (archived != null) 'archived': archived,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (deletedAt != null) 'deleted_at': deletedAt,
     });
   }
 
@@ -298,6 +436,9 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
     Value<int>? color,
     Value<String>? emoji,
     Value<DateTime>? createdAt,
+    Value<bool>? archived,
+    Value<int>? sortOrder,
+    Value<DateTime?>? deletedAt,
   }) {
     return JournalsCompanion(
       id: id ?? this.id,
@@ -305,6 +446,9 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
       color: color ?? this.color,
       emoji: emoji ?? this.emoji,
       createdAt: createdAt ?? this.createdAt,
+      archived: archived ?? this.archived,
+      sortOrder: sortOrder ?? this.sortOrder,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 
@@ -326,6 +470,15 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (archived.present) {
+      map['archived'] = Variable<bool>(archived.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     return map;
   }
 
@@ -336,7 +489,10 @@ class JournalsCompanion extends UpdateCompanion<Journal> {
           ..write('name: $name, ')
           ..write('color: $color, ')
           ..write('emoji: $emoji, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('archived: $archived, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -490,6 +646,52 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, Entry> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _stableIdMeta = const VerificationMeta(
+    'stableId',
+  );
+  @override
+  late final GeneratedColumn<String> stableId = GeneratedColumn<String>(
+    'stable_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _monthDayMeta = const VerificationMeta(
+    'monthDay',
+  );
+  @override
+  late final GeneratedColumn<String> monthDay = GeneratedColumn<String>(
+    'month_day',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _locationMeta = const VerificationMeta(
+    'location',
+  );
+  @override
+  late final GeneratedColumn<String> location = GeneratedColumn<String>(
+    'location',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -504,6 +706,10 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, Entry> {
     writingSeconds,
     mood,
     isDraft,
+    stableId,
+    monthDay,
+    location,
+    deletedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -598,6 +804,30 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, Entry> {
         isDraft.isAcceptableOrUnknown(data['is_draft']!, _isDraftMeta),
       );
     }
+    if (data.containsKey('stable_id')) {
+      context.handle(
+        _stableIdMeta,
+        stableId.isAcceptableOrUnknown(data['stable_id']!, _stableIdMeta),
+      );
+    }
+    if (data.containsKey('month_day')) {
+      context.handle(
+        _monthDayMeta,
+        monthDay.isAcceptableOrUnknown(data['month_day']!, _monthDayMeta),
+      );
+    }
+    if (data.containsKey('location')) {
+      context.handle(
+        _locationMeta,
+        location.isAcceptableOrUnknown(data['location']!, _locationMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
     return context;
   }
 
@@ -655,6 +885,22 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, Entry> {
         DriftSqlType.bool,
         data['${effectivePrefix}is_draft'],
       )!,
+      stableId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}stable_id'],
+      )!,
+      monthDay: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}month_day'],
+      )!,
+      location: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}location'],
+      ),
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
     );
   }
 
@@ -687,6 +933,10 @@ class Entry extends DataClass implements Insertable<Entry> {
   /// Mood 1 (bad) .. 5 (great), optional.
   final int? mood;
   final bool isDraft;
+  final String stableId;
+  final String monthDay;
+  final String? location;
+  final DateTime? deletedAt;
   const Entry({
     required this.id,
     required this.journalId,
@@ -700,6 +950,10 @@ class Entry extends DataClass implements Insertable<Entry> {
     required this.writingSeconds,
     this.mood,
     required this.isDraft,
+    required this.stableId,
+    required this.monthDay,
+    this.location,
+    this.deletedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -718,6 +972,14 @@ class Entry extends DataClass implements Insertable<Entry> {
       map['mood'] = Variable<int>(mood);
     }
     map['is_draft'] = Variable<bool>(isDraft);
+    map['stable_id'] = Variable<String>(stableId);
+    map['month_day'] = Variable<String>(monthDay);
+    if (!nullToAbsent || location != null) {
+      map['location'] = Variable<String>(location);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -735,6 +997,14 @@ class Entry extends DataClass implements Insertable<Entry> {
       writingSeconds: Value(writingSeconds),
       mood: mood == null && nullToAbsent ? const Value.absent() : Value(mood),
       isDraft: Value(isDraft),
+      stableId: Value(stableId),
+      monthDay: Value(monthDay),
+      location: location == null && nullToAbsent
+          ? const Value.absent()
+          : Value(location),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -756,6 +1026,10 @@ class Entry extends DataClass implements Insertable<Entry> {
       writingSeconds: serializer.fromJson<int>(json['writingSeconds']),
       mood: serializer.fromJson<int?>(json['mood']),
       isDraft: serializer.fromJson<bool>(json['isDraft']),
+      stableId: serializer.fromJson<String>(json['stableId']),
+      monthDay: serializer.fromJson<String>(json['monthDay']),
+      location: serializer.fromJson<String?>(json['location']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -774,6 +1048,10 @@ class Entry extends DataClass implements Insertable<Entry> {
       'writingSeconds': serializer.toJson<int>(writingSeconds),
       'mood': serializer.toJson<int?>(mood),
       'isDraft': serializer.toJson<bool>(isDraft),
+      'stableId': serializer.toJson<String>(stableId),
+      'monthDay': serializer.toJson<String>(monthDay),
+      'location': serializer.toJson<String?>(location),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -790,6 +1068,10 @@ class Entry extends DataClass implements Insertable<Entry> {
     int? writingSeconds,
     Value<int?> mood = const Value.absent(),
     bool? isDraft,
+    String? stableId,
+    String? monthDay,
+    Value<String?> location = const Value.absent(),
+    Value<DateTime?> deletedAt = const Value.absent(),
   }) => Entry(
     id: id ?? this.id,
     journalId: journalId ?? this.journalId,
@@ -803,6 +1085,10 @@ class Entry extends DataClass implements Insertable<Entry> {
     writingSeconds: writingSeconds ?? this.writingSeconds,
     mood: mood.present ? mood.value : this.mood,
     isDraft: isDraft ?? this.isDraft,
+    stableId: stableId ?? this.stableId,
+    monthDay: monthDay ?? this.monthDay,
+    location: location.present ? location.value : this.location,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
   );
   Entry copyWithCompanion(EntriesCompanion data) {
     return Entry(
@@ -822,6 +1108,10 @@ class Entry extends DataClass implements Insertable<Entry> {
           : this.writingSeconds,
       mood: data.mood.present ? data.mood.value : this.mood,
       isDraft: data.isDraft.present ? data.isDraft.value : this.isDraft,
+      stableId: data.stableId.present ? data.stableId.value : this.stableId,
+      monthDay: data.monthDay.present ? data.monthDay.value : this.monthDay,
+      location: data.location.present ? data.location.value : this.location,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -839,7 +1129,11 @@ class Entry extends DataClass implements Insertable<Entry> {
           ..write('wordCount: $wordCount, ')
           ..write('writingSeconds: $writingSeconds, ')
           ..write('mood: $mood, ')
-          ..write('isDraft: $isDraft')
+          ..write('isDraft: $isDraft, ')
+          ..write('stableId: $stableId, ')
+          ..write('monthDay: $monthDay, ')
+          ..write('location: $location, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -858,6 +1152,10 @@ class Entry extends DataClass implements Insertable<Entry> {
     writingSeconds,
     mood,
     isDraft,
+    stableId,
+    monthDay,
+    location,
+    deletedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -874,7 +1172,11 @@ class Entry extends DataClass implements Insertable<Entry> {
           other.wordCount == this.wordCount &&
           other.writingSeconds == this.writingSeconds &&
           other.mood == this.mood &&
-          other.isDraft == this.isDraft);
+          other.isDraft == this.isDraft &&
+          other.stableId == this.stableId &&
+          other.monthDay == this.monthDay &&
+          other.location == this.location &&
+          other.deletedAt == this.deletedAt);
 }
 
 class EntriesCompanion extends UpdateCompanion<Entry> {
@@ -890,6 +1192,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
   final Value<int> writingSeconds;
   final Value<int?> mood;
   final Value<bool> isDraft;
+  final Value<String> stableId;
+  final Value<String> monthDay;
+  final Value<String?> location;
+  final Value<DateTime?> deletedAt;
   const EntriesCompanion({
     this.id = const Value.absent(),
     this.journalId = const Value.absent(),
@@ -903,6 +1209,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
     this.writingSeconds = const Value.absent(),
     this.mood = const Value.absent(),
     this.isDraft = const Value.absent(),
+    this.stableId = const Value.absent(),
+    this.monthDay = const Value.absent(),
+    this.location = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   });
   EntriesCompanion.insert({
     this.id = const Value.absent(),
@@ -917,6 +1227,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
     this.writingSeconds = const Value.absent(),
     this.mood = const Value.absent(),
     this.isDraft = const Value.absent(),
+    this.stableId = const Value.absent(),
+    this.monthDay = const Value.absent(),
+    this.location = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   }) : journalId = Value(journalId),
        contentJson = Value(contentJson),
        entryDate = Value(entryDate);
@@ -933,6 +1247,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
     Expression<int>? writingSeconds,
     Expression<int>? mood,
     Expression<bool>? isDraft,
+    Expression<String>? stableId,
+    Expression<String>? monthDay,
+    Expression<String>? location,
+    Expression<DateTime>? deletedAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -947,6 +1265,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
       if (writingSeconds != null) 'writing_seconds': writingSeconds,
       if (mood != null) 'mood': mood,
       if (isDraft != null) 'is_draft': isDraft,
+      if (stableId != null) 'stable_id': stableId,
+      if (monthDay != null) 'month_day': monthDay,
+      if (location != null) 'location': location,
+      if (deletedAt != null) 'deleted_at': deletedAt,
     });
   }
 
@@ -963,6 +1285,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
     Value<int>? writingSeconds,
     Value<int?>? mood,
     Value<bool>? isDraft,
+    Value<String>? stableId,
+    Value<String>? monthDay,
+    Value<String?>? location,
+    Value<DateTime?>? deletedAt,
   }) {
     return EntriesCompanion(
       id: id ?? this.id,
@@ -977,6 +1303,10 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
       writingSeconds: writingSeconds ?? this.writingSeconds,
       mood: mood ?? this.mood,
       isDraft: isDraft ?? this.isDraft,
+      stableId: stableId ?? this.stableId,
+      monthDay: monthDay ?? this.monthDay,
+      location: location ?? this.location,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 
@@ -1019,6 +1349,18 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
     if (isDraft.present) {
       map['is_draft'] = Variable<bool>(isDraft.value);
     }
+    if (stableId.present) {
+      map['stable_id'] = Variable<String>(stableId.value);
+    }
+    if (monthDay.present) {
+      map['month_day'] = Variable<String>(monthDay.value);
+    }
+    if (location.present) {
+      map['location'] = Variable<String>(location.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     return map;
   }
 
@@ -1036,7 +1378,11 @@ class EntriesCompanion extends UpdateCompanion<Entry> {
           ..write('wordCount: $wordCount, ')
           ..write('writingSeconds: $writingSeconds, ')
           ..write('mood: $mood, ')
-          ..write('isDraft: $isDraft')
+          ..write('isDraft: $isDraft, ')
+          ..write('stableId: $stableId, ')
+          ..write('monthDay: $monthDay, ')
+          ..write('location: $location, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -2014,6 +2360,9 @@ typedef $$JournalsTableCreateCompanionBuilder =
       required int color,
       Value<String> emoji,
       Value<DateTime> createdAt,
+      Value<bool> archived,
+      Value<int> sortOrder,
+      Value<DateTime?> deletedAt,
     });
 typedef $$JournalsTableUpdateCompanionBuilder =
     JournalsCompanion Function({
@@ -2022,6 +2371,9 @@ typedef $$JournalsTableUpdateCompanionBuilder =
       Value<int> color,
       Value<String> emoji,
       Value<DateTime> createdAt,
+      Value<bool> archived,
+      Value<int> sortOrder,
+      Value<DateTime?> deletedAt,
     });
 
 final class $$JournalsTableReferences
@@ -2079,6 +2431,21 @@ class $$JournalsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get archived => $composableBuilder(
+    column: $table.archived,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2141,6 +2508,21 @@ class $$JournalsTableOrderingComposer
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get archived => $composableBuilder(
+    column: $table.archived,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$JournalsTableAnnotationComposer
@@ -2166,6 +2548,15 @@ class $$JournalsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get archived =>
+      $composableBuilder(column: $table.archived, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   Expression<T> entriesRefs<T extends Object>(
     Expression<T> Function($$EntriesTableAnnotationComposer a) f,
@@ -2226,12 +2617,18 @@ class $$JournalsTableTableManager
                 Value<int> color = const Value.absent(),
                 Value<String> emoji = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<bool> archived = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => JournalsCompanion(
                 id: id,
                 name: name,
                 color: color,
                 emoji: emoji,
                 createdAt: createdAt,
+                archived: archived,
+                sortOrder: sortOrder,
+                deletedAt: deletedAt,
               ),
           createCompanionCallback:
               ({
@@ -2240,17 +2637,23 @@ class $$JournalsTableTableManager
                 required int color,
                 Value<String> emoji = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<bool> archived = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => JournalsCompanion.insert(
                 id: id,
                 name: name,
                 color: color,
                 emoji: emoji,
                 createdAt: createdAt,
+                archived: archived,
+                sortOrder: sortOrder,
+                deletedAt: deletedAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$JournalsTable, Journal>(table),
                   $$JournalsTableReferences(db, table, e),
                 ),
               )
@@ -2263,14 +2666,19 @@ class $$JournalsTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (entriesRefs)
-                    await $_getPrefetchedData<Journal, $JournalsTable, Entry>(
+                    await $_getPrefetchedDataByColumns<
+                      Journal,
+                      $JournalsTable,
+                      Entry,
+                      $EntriesTable
+                    >(
                       currentTable: table,
                       referencedTable: $$JournalsTableReferences
                           ._entriesRefsTable(db),
                       managerFromTypedResult: (p0) =>
                           $$JournalsTableReferences(db, table, p0).entriesRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.journalId == item.id),
+                      currentColumn: 'id',
+                      referencedColumn: 'journal_id',
                       typedResults: items,
                     ),
                 ];
@@ -2309,6 +2717,10 @@ typedef $$EntriesTableCreateCompanionBuilder =
       Value<int> writingSeconds,
       Value<int?> mood,
       Value<bool> isDraft,
+      Value<String> stableId,
+      Value<String> monthDay,
+      Value<String?> location,
+      Value<DateTime?> deletedAt,
     });
 typedef $$EntriesTableUpdateCompanionBuilder =
     EntriesCompanion Function({
@@ -2324,6 +2736,10 @@ typedef $$EntriesTableUpdateCompanionBuilder =
       Value<int> writingSeconds,
       Value<int?> mood,
       Value<bool> isDraft,
+      Value<String> stableId,
+      Value<String> monthDay,
+      Value<String?> location,
+      Value<DateTime?> deletedAt,
     });
 
 final class $$EntriesTableReferences
@@ -2445,6 +2861,26 @@ class $$EntriesTableFilterComposer
 
   ColumnFilters<bool> get isDraft => $composableBuilder(
     column: $table.isDraft,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get stableId => $composableBuilder(
+    column: $table.stableId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get monthDay => $composableBuilder(
+    column: $table.monthDay,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get location => $composableBuilder(
+    column: $table.location,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2586,6 +3022,26 @@ class $$EntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get stableId => $composableBuilder(
+    column: $table.stableId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get monthDay => $composableBuilder(
+    column: $table.monthDay,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get location => $composableBuilder(
+    column: $table.location,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$JournalsTableOrderingComposer get journalId {
     final $$JournalsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -2655,6 +3111,18 @@ class $$EntriesTableAnnotationComposer
 
   GeneratedColumn<bool> get isDraft =>
       $composableBuilder(column: $table.isDraft, builder: (column) => column);
+
+  GeneratedColumn<String> get stableId =>
+      $composableBuilder(column: $table.stableId, builder: (column) => column);
+
+  GeneratedColumn<String> get monthDay =>
+      $composableBuilder(column: $table.monthDay, builder: (column) => column);
+
+  GeneratedColumn<String> get location =>
+      $composableBuilder(column: $table.location, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   $$JournalsTableAnnotationComposer get journalId {
     final $$JournalsTableAnnotationComposer composer = $composerBuilder(
@@ -2774,6 +3242,10 @@ class $$EntriesTableTableManager
                 Value<int> writingSeconds = const Value.absent(),
                 Value<int?> mood = const Value.absent(),
                 Value<bool> isDraft = const Value.absent(),
+                Value<String> stableId = const Value.absent(),
+                Value<String> monthDay = const Value.absent(),
+                Value<String?> location = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => EntriesCompanion(
                 id: id,
                 journalId: journalId,
@@ -2787,6 +3259,10 @@ class $$EntriesTableTableManager
                 writingSeconds: writingSeconds,
                 mood: mood,
                 isDraft: isDraft,
+                stableId: stableId,
+                monthDay: monthDay,
+                location: location,
+                deletedAt: deletedAt,
               ),
           createCompanionCallback:
               ({
@@ -2802,6 +3278,10 @@ class $$EntriesTableTableManager
                 Value<int> writingSeconds = const Value.absent(),
                 Value<int?> mood = const Value.absent(),
                 Value<bool> isDraft = const Value.absent(),
+                Value<String> stableId = const Value.absent(),
+                Value<String> monthDay = const Value.absent(),
+                Value<String?> location = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => EntriesCompanion.insert(
                 id: id,
                 journalId: journalId,
@@ -2815,11 +3295,15 @@ class $$EntriesTableTableManager
                 writingSeconds: writingSeconds,
                 mood: mood,
                 isDraft: isDraft,
+                stableId: stableId,
+                monthDay: monthDay,
+                location: location,
+                deletedAt: deletedAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$EntriesTable, Entry>(table),
                   $$EntriesTableReferences(db, table, e),
                 ),
               )
@@ -2871,10 +3355,11 @@ class $$EntriesTableTableManager
                   getPrefetchedDataCallback: (items) async {
                     return [
                       if (entryTagsRefs)
-                        await $_getPrefetchedData<
+                        await $_getPrefetchedDataByColumns<
                           Entry,
                           $EntriesTable,
-                          EntryTag
+                          EntryTag,
+                          $EntryTagsTable
                         >(
                           currentTable: table,
                           referencedTable: $$EntriesTableReferences
@@ -2885,17 +3370,16 @@ class $$EntriesTableTableManager
                                 table,
                                 p0,
                               ).entryTagsRefs,
-                          referencedItemsForCurrentItem:
-                              (item, referencedItems) => referencedItems.where(
-                                (e) => e.entryId == item.id,
-                              ),
+                          currentColumn: 'id',
+                          referencedColumn: 'entry_id',
                           typedResults: items,
                         ),
                       if (attachmentsRefs)
-                        await $_getPrefetchedData<
+                        await $_getPrefetchedDataByColumns<
                           Entry,
                           $EntriesTable,
-                          Attachment
+                          Attachment,
+                          $AttachmentsTable
                         >(
                           currentTable: table,
                           referencedTable: $$EntriesTableReferences
@@ -2906,10 +3390,8 @@ class $$EntriesTableTableManager
                                 table,
                                 p0,
                               ).attachmentsRefs,
-                          referencedItemsForCurrentItem:
-                              (item, referencedItems) => referencedItems.where(
-                                (e) => e.entryId == item.id,
-                              ),
+                          currentColumn: 'id',
+                          referencedColumn: 'entry_id',
                           typedResults: items,
                         ),
                     ];
@@ -3106,8 +3588,10 @@ class $$TagsTableTableManager
                   TagsCompanion.insert(id: id, name: name),
           withReferenceMapper: (p0) => p0
               .map(
-                (e) =>
-                    (e.readTable(table), $$TagsTableReferences(db, table, e)),
+                (e) => (
+                  e.readTable<$TagsTable, Tag>(table),
+                  $$TagsTableReferences(db, table, e),
+                ),
               )
               .toList(),
           prefetchHooksCallback: ({entryTagsRefs = false}) {
@@ -3118,14 +3602,19 @@ class $$TagsTableTableManager
               getPrefetchedDataCallback: (items) async {
                 return [
                   if (entryTagsRefs)
-                    await $_getPrefetchedData<Tag, $TagsTable, EntryTag>(
+                    await $_getPrefetchedDataByColumns<
+                      Tag,
+                      $TagsTable,
+                      EntryTag,
+                      $EntryTagsTable
+                    >(
                       currentTable: table,
                       referencedTable: $$TagsTableReferences
                           ._entryTagsRefsTable(db),
                       managerFromTypedResult: (p0) =>
                           $$TagsTableReferences(db, table, p0).entryTagsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.tagId == item.id),
+                      currentColumn: 'id',
+                      referencedColumn: 'tag_id',
                       typedResults: items,
                     ),
                 ];
@@ -3419,7 +3908,7 @@ class $$EntryTagsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$EntryTagsTable, EntryTag>(table),
                   $$EntryTagsTableReferences(db, table, e),
                 ),
               )
@@ -3724,7 +4213,7 @@ class $$AttachmentsTableTableManager
           withReferenceMapper: (p0) => p0
               .map(
                 (e) => (
-                  e.readTable(table),
+                  e.readTable<$AttachmentsTable, Attachment>(table),
                   $$AttachmentsTableReferences(db, table, e),
                 ),
               )
@@ -3900,7 +4389,16 @@ class $$SettingsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SettingsTable, Setting>(table),
+                  BaseReferences<_$AppDatabase, $SettingsTable, Setting>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),

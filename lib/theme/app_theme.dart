@@ -170,9 +170,13 @@ class Motion {
 }
 
 ThemeData buildTheme({required Brightness brightness}) {
-  final t = brightness == Brightness.light ? JournalTokens.light : JournalTokens.dark;
+  final t = brightness == Brightness.light
+      ? JournalTokens.light
+      : JournalTokens.dark;
   final text = AppType.scale(t.ink, t.inkDim, t.inkFaint);
-  final onAccent = brightness == Brightness.light ? Palette.deskPage : Palette.nightGround;
+  final onAccent = brightness == Brightness.light
+      ? Palette.deskPage
+      : Palette.nightGround;
 
   // Written out rather than seeded. Material widgets still read these, but no
   // screen picks a colour from here — screens use JournalTokens.
@@ -225,9 +229,9 @@ ThemeData buildTheme({required Brightness brightness}) {
     splashFactory: InkRipple.splashFactory,
     // ...and the default page transition is the M3 zoom. Fade-forwards is
     // quieter and does not make every push feel like a system animation.
-    pageTransitionsTheme: const PageTransitionsTheme(builders: {
-      TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-    }),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {TargetPlatform.android: AccessiblePageTransitionsBuilder()},
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: t.ground,
       surfaceTintColor: Colors.transparent,
@@ -242,12 +246,14 @@ ThemeData buildTheme({required Brightness brightness}) {
       systemOverlayStyle: brightness == Brightness.light
           ? SystemUiOverlayStyle.dark.copyWith(
               statusBarColor: Colors.transparent,
-              systemNavigationBarColor: t.ground,
-              systemNavigationBarIconBrightness: Brightness.dark)
+              systemNavigationBarColor: Colors.transparent,
+              systemNavigationBarIconBrightness: Brightness.dark,
+            )
           : SystemUiOverlayStyle.light.copyWith(
               statusBarColor: Colors.transparent,
-              systemNavigationBarColor: t.ground,
-              systemNavigationBarIconBrightness: Brightness.light),
+              systemNavigationBarColor: Colors.transparent,
+              systemNavigationBarIconBrightness: Brightness.light,
+            ),
     ),
     dividerTheme: DividerThemeData(color: t.hairline, thickness: 1, space: 1),
     iconTheme: IconThemeData(color: t.inkDim, size: 22),
@@ -276,7 +282,10 @@ ThemeData buildTheme({required Brightness brightness}) {
       side: BorderSide(color: t.hairline),
       shape: const RoundedRectangleBorder(borderRadius: Radii.chip),
       labelStyle: text.labelLarge!.copyWith(fontSize: 13),
-      secondaryLabelStyle: text.labelLarge!.copyWith(fontSize: 13, color: t.ground),
+      secondaryLabelStyle: text.labelLarge!.copyWith(
+        fontSize: 13,
+        color: t.ground,
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       showCheckmark: false,
       elevation: 0,
@@ -327,11 +336,18 @@ ThemeData buildTheme({required Brightness brightness}) {
       labelStyle: text.bodySmall,
       floatingLabelStyle: text.utility.copyWith(color: t.inkDim),
       contentPadding: const EdgeInsets.symmetric(vertical: 12),
-      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: t.hairline)),
-      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: t.ink, width: 2)),
-      errorBorder: UnderlineInputBorder(borderSide: BorderSide(color: t.danger)),
-      focusedErrorBorder:
-          UnderlineInputBorder(borderSide: BorderSide(color: t.danger, width: 2)),
+      enabledBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: t.hairline),
+      ),
+      focusedBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: t.ink, width: 2),
+      ),
+      errorBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: t.danger),
+      ),
+      focusedErrorBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: t.danger, width: 2),
+      ),
       errorStyle: text.bodySmall!.copyWith(color: t.danger),
     ),
     textSelectionTheme: TextSelectionThemeData(
@@ -361,7 +377,7 @@ ThemeData buildTheme({required Brightness brightness}) {
     snackBarTheme: SnackBarThemeData(
       backgroundColor: t.ink,
       contentTextStyle: text.bodySmall!.copyWith(color: t.ground),
-      actionTextColor: t.accent,
+      actionTextColor: t.ground,
       behavior: SnackBarBehavior.floating,
       elevation: 0,
       shape: const RoundedRectangleBorder(borderRadius: Radii.card),
@@ -390,4 +406,26 @@ ThemeData buildTheme({required Brightness brightness}) {
       ),
     ),
   );
+}
+
+/// Retain the platform back preview, with no motion when Android requests it.
+class AccessiblePageTransitionsBuilder extends PageTransitionsBuilder {
+  const AccessiblePageTransitionsBuilder();
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    return const PredictiveBackPageTransitionsBuilder().buildTransitions(
+      route,
+      context,
+      animation,
+      secondaryAnimation,
+      child,
+    );
+  }
 }

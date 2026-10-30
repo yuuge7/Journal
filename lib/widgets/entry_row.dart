@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -26,6 +27,8 @@ class EntryRow extends ConsumerWidget {
     required this.entry,
     this.dateLabel,
     this.showJournal = true,
+    this.selected = false,
+    this.onSelect,
   });
 
   final Entry entry;
@@ -35,159 +38,202 @@ class EntryRow extends ConsumerWidget {
   final String? dateLabel;
 
   final bool showJournal;
+  final bool selected;
+  final VoidCallback? onSelect;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final text = Theme.of(context).textTheme;
-    final tags = ref.watch(tagsByEntryProvider).value?[entry.id] ?? const <Tag>[];
-    final thumbName = ref.watch(thumbnailsProvider).value?[entry.id];
+    final tags = ref.watch(entryTagsProvider(entry.id)).value ?? const <Tag>[];
+    final thumbName = ref.watch(entryThumbProvider(entry.id)).value;
     final journals = ref.watch(journalsProvider).value ?? const <Journal>[];
     final journal = journals.where((j) => j.id == entry.journalId).firstOrNull;
 
-    final preview = entry.plainText.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final backfill = formatBackfill(entry.entryDate, entry.createdAt,
-        dayEndsAt: ref.watch(dayEndsAtProvider).value ?? 0);
+    final query = ref.watch(searchQueryProvider);
+    final preview = entryPreview(entry.plainText, query: query);
+    final backfill = formatBackfill(
+      entry.entryDate,
+      entry.createdAt,
+      dayEndsAt: ref.watch(dayEndsAtProvider).value ?? 0,
+    );
     final hasTitle = entry.title.trim().isNotEmpty;
 
-    return Semantics(
-      button: true,
-      label: [
-        if (hasTitle) entry.title.trim() else 'Untitled entry',
-        dateLabel ?? DateFormat.yMMMMd().format(entry.entryDate),
-        formatWords(entry.wordCount),
-        if (entry.mood != null) 'mood ${moodLabel(entry.mood!)}',
-      ].join(', '),
-      excludeSemantics: true,
-      child: InkWell(
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => EditorScreen(entryId: entry.id))),
-        onLongPress: () => _confirmDelete(context, ref),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(0, 11, 20, 13),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Header row: what this entry *is* — which notebook, which
-                    // day, how it felt. The measurements go on their own line
-                    // below; mood sat next to them in an earlier pass and read
-                    // as a chart of the numbers rather than a separate fact.
-                    if (dateLabel != null ||
-                        (showJournal && journal != null) ||
-                        entry.isDraft ||
-                        entry.mood != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 5),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Wrap(
-                                spacing: 10,
-                                runSpacing: 3,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  if (dateLabel != null)
-                                    Text(dateLabel!.toUpperCase(),
-                                        style: text.utility),
-                                  if (showJournal && journal != null)
-                                    _JournalMark(journal: journal),
-                                  if (entry.isDraft) const _DraftMark(),
-                                ],
-                              ),
-                            ),
-                            if (entry.mood != null)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 10),
-                                child: MoodMeter(mood: entry.mood!, size: 11),
-                              ),
-                          ],
-                        ),
-                      ),
-                    if (hasTitle)
-                      Text(
-                        entry.title.trim(),
-                        style: text.titleMedium,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    if (preview.isNotEmpty)
-                      Padding(
-                        padding: EdgeInsets.only(top: hasTitle ? 3 : 0),
-                        child: Text(
-                          preview,
-                          style: hasTitle
-                              ? text.bodyMedium
-                              : text.bodyMedium!.copyWith(color: t.ink),
-                          maxLines: hasTitle ? 2 : 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    if (!hasTitle && preview.isEmpty)
-                      Text('Empty entry',
-                          style: text.bodyMedium!.copyWith(color: t.inkFaint)),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 7),
-                      child: _MetaLine(
-                        entry: entry,
-                        tags: tags,
-                        backfill: backfill,
-                      ),
-                    ),
-                  ],
+    return Dismissible(
+      key: ValueKey('entry-${entry.id}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: t.danger,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.all(20),
+        child: Icon(Icons.delete_outline, color: t.page),
+      ),
+      confirmDismiss: (_) async {
+        await _delete(context, ref);
+        return false;
+      },
+      child: Semantics(
+        button: true,
+        label: [
+          if (hasTitle) entry.title.trim() else 'Untitled entry',
+          dateLabel ?? DateFormat.yMMMMd().format(entry.entryDate),
+          formatWords(entry.wordCount),
+          if (entry.mood != null) 'mood ${moodLabel(entry.mood!)}',
+        ].join(', '),
+        excludeSemantics: true,
+        onTap:
+            onSelect ??
+            () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => EditorScreen(entryId: entry.id),
+              ),
+            ),
+        customSemanticsActions: {
+          const CustomSemanticsAction(label: 'Move to recently deleted'): () =>
+              _delete(context, ref),
+          const CustomSemanticsAction(label: 'Select entry'): ?onSelect,
+        },
+        child: InkWell(
+          onTap:
+              onSelect ??
+              () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => EditorScreen(entryId: entry.id),
                 ),
               ),
-              if (thumbName != null) ...[
-                const SizedBox(width: 14),
-                _Thumb(fileName: thumbName),
+          onLongPress: () => _delete(context, ref),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(0, 11, 20, 13),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (onSelect != null)
+                        Icon(
+                          selected
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                        ),
+                      // Header row: what this entry *is* — which notebook, which
+                      // day, how it felt. The measurements go on their own line
+                      // below; mood sat next to them in an earlier pass and read
+                      // as a chart of the numbers rather than a separate fact.
+                      if (dateLabel != null ||
+                          (showJournal && journal != null) ||
+                          entry.isDraft ||
+                          entry.mood != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 5),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Wrap(
+                                  spacing: 10,
+                                  runSpacing: 3,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    if (dateLabel != null)
+                                      Text(
+                                        dateLabel!.toUpperCase(),
+                                        style: text.utility,
+                                      ),
+                                    if (showJournal && journal != null)
+                                      _JournalMark(journal: journal),
+                                    if (entry.isDraft) const _DraftMark(),
+                                  ],
+                                ),
+                              ),
+                              if (entry.mood != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 10),
+                                  child: MoodMeter(mood: entry.mood!, size: 11),
+                                ),
+                            ],
+                          ),
+                        ),
+                      if (hasTitle)
+                        Text(
+                          entry.title.trim(),
+                          style: text.titleMedium,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      if (thumbName != null && entry.wordCount < 12)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8, bottom: 8),
+                          child: _Thumb(fileName: thumbName, wide: true),
+                        ),
+                      if (preview.isNotEmpty)
+                        Padding(
+                          padding: EdgeInsets.only(top: hasTitle ? 3 : 0),
+                          child: Text.rich(
+                            highlightedPreview(
+                              preview,
+                              query,
+                              t.accentSoft,
+                              t.ink,
+                            ),
+                            style: hasTitle
+                                ? text.bodyMedium
+                                : text.bodyMedium!.copyWith(color: t.ink),
+                            maxLines: hasTitle ? 2 : 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      if (!hasTitle && preview.isEmpty)
+                        Text(
+                          'Empty entry',
+                          style: text.bodyMedium!.copyWith(color: t.inkFaint),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 7),
+                        child: _MetaLine(
+                          entry: entry,
+                          tags: tags,
+                          backfill: backfill,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (thumbName != null && entry.wordCount >= 12) ...[
+                  const SizedBox(width: 14),
+                  _Thumb(fileName: thumbName, wide: entry.wordCount < 12),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
-    final title = entry.title.trim();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title.isEmpty ? 'Delete this entry?' : 'Delete "$title"?'),
-        content: const Text(
-            'The entry and any photos on it are removed from this device. '
-            'There is no undo, and a backup exported earlier still has it.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Keep')),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: context.tokens.danger,
-              foregroundColor: context.tokens.ground,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
-        ],
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final db = ref.read(databaseProvider);
+    await db.deleteEntry(entry.id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Moved to recently deleted'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => db.restoreEntry(entry.id),
+        ),
       ),
     );
-    if (confirmed != true) return;
-    final db = ref.read(databaseProvider);
-    final service = ref.read(attachmentServiceProvider);
-    for (final a in await db.attachmentsForEntry(entry.id)) {
-      await service.deleteFile(a.fileName);
-    }
-    await db.deleteEntry(entry.id);
   }
 }
 
 /// Words, minutes, mood and tags — the row's one measured line.
 class _MetaLine extends StatelessWidget {
-  const _MetaLine({required this.entry, required this.tags, required this.backfill});
+  const _MetaLine({
+    required this.entry,
+    required this.tags,
+    required this.backfill,
+  });
 
   final Entry entry;
   final List<Tag> tags;
@@ -209,10 +255,7 @@ class _MetaLine extends StatelessWidget {
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Text(
-          facts.join('  ·  '),
-          style: text.meta.copyWith(color: t.inkFaint),
-        ),
+        Text(facts.join('  ·  '), style: text.meta.copyWith(color: t.inkFaint)),
         for (final tag in tags)
           Text('#${tag.name}', style: text.meta.copyWith(color: t.inkDim)),
       ],
@@ -254,7 +297,8 @@ class _DraftMark extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     return Tooltip(
-      message: 'The editor closed without finishing this entry. '
+      message:
+          'The editor closed without finishing this entry. '
           'Open it and press Done to count it.',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -262,16 +306,19 @@ class _DraftMark extends StatelessWidget {
           border: Border.all(color: t.hairline),
           borderRadius: Radii.chip,
         ),
-        child: Text('UNFINISHED',
-            style: Theme.of(context).textTheme.utility.copyWith(fontSize: 9.5)),
+        child: Text(
+          'UNFINISHED',
+          style: Theme.of(context).textTheme.utility.copyWith(fontSize: 9.5),
+        ),
       ),
     );
   }
 }
 
 class _Thumb extends ConsumerWidget {
-  const _Thumb({required this.fileName});
+  const _Thumb({required this.fileName, this.wide = false});
   final String fileName;
+  final bool wide;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -281,8 +328,8 @@ class _Thumb extends ConsumerWidget {
       builder: (context, snap) {
         final file = snap.data;
         return Container(
-          width: 58,
-          height: 58,
+          width: wide ? double.infinity : 58,
+          height: wide ? 160 : 58,
           decoration: BoxDecoration(
             color: t.pageEdge,
             borderRadius: Radii.chip,
@@ -291,11 +338,18 @@ class _Thumb extends ConsumerWidget {
           clipBehavior: Clip.antiAlias,
           child: file == null
               ? null
-              : Image.file(file, fit: BoxFit.cover, errorBuilder: (_, _, _) {
-                  // A photo whose file went missing must not blow up the feed.
-                  return Icon(Icons.image_not_supported_outlined,
-                      size: 18, color: t.inkFaint);
-                }),
+              : Image.file(
+                  file,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) {
+                    // A photo whose file went missing must not blow up the feed.
+                    return Icon(
+                      Icons.image_not_supported_outlined,
+                      size: 18,
+                      color: t.inkFaint,
+                    );
+                  },
+                ),
         );
       },
     );

@@ -1,0 +1,5 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="write" android:enabled="true" android:icon="@drawable/ic_notification" android:shortcutShortLabel="@string/shortcut_write">
+        <intent android:action="com.ionel.journal.WRITE" android:targetPackage="com.ionel.journal" android:targetClass="com.ionel.journal.MainActivity" />
+    </shortcut>
+</shortcuts>

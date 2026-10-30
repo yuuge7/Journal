@@ -49,7 +49,7 @@ class Palette {
   static const nightInk = Color(0xFFE7E4DC);
   static const nightInkDim = Color(0xFFA6ABB3);
   // 4.7:1 on nightGround, up from 4.0:1.
-  static const nightInkFaint = Color(0xFF7E848D);
+  static const nightInkFaint = Color(0xFF828892);
   static const nightAccent = Color(0xFFE0A84A);
   static const nightAccentSoft = Color(0xFF3B3122);
   static const nightSpine = Color(0xFF2E343D);

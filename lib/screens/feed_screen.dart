@@ -10,6 +10,8 @@ import '../widgets/entry_row.dart';
 import '../widgets/formatting.dart';
 import '../widgets/nav_bar.dart';
 import '../widgets/time_spine.dart';
+import '../widgets/year_grid.dart';
+import '../data/templates.dart';
 import 'editor_screen.dart';
 import 'journals_screen.dart';
 
@@ -34,10 +36,79 @@ class FeedScreen extends ConsumerStatefulWidget {
 
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   bool _searching = false;
+  final _scroll = ScrollController();
+  final _selected = <int>{};
+  bool _selecting = false;
+
+  Future<void> _jump() async {
+    final month = await showYearJump(context);
+    if (month == null || !mounted) return;
+    ref
+        .read(feedBeforeProvider.notifier)
+        .set(DateTime(month.year, month.month + 1, 0, 23, 59, 59));
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  Future<void> _bulk(bool move) async {
+    if (_selected.isEmpty) return;
+    final db = ref.read(databaseProvider);
+    if (move) {
+      final journals = ref.read(journalsProvider).value ?? [];
+      final id = await showModalBottomSheet<int>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final j in journals)
+                ListTile(
+                  title: Text(j.name),
+                  onTap: () => Navigator.pop(context, j.id),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (id != null) await db.bulkMove(_selected, id);
+    } else {
+      final controller = TextEditingController();
+      final tag = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Tag selected entries'),
+          content: TextField(
+            controller: controller,
+            maxLength: 32,
+            decoration: const InputDecoration(labelText: 'Tag'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      );
+      controller.dispose();
+      if (tag != null && tag.isNotEmpty) await db.bulkTag(_selected, tag);
+    }
+    if (mounted) {
+      setState(() {
+        _selected.clear();
+        _selecting = false;
+      });
+    }
+  }
+
   final _searchController = TextEditingController();
 
   @override
   void dispose() {
+    _scroll.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -46,21 +117,26 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     setState(() => _searching = false);
     _searchController.clear();
     ref.read(searchQueryProvider.notifier).set('');
+    ref.read(titlesOnlyProvider.notifier).reset();
+    ref.read(thisYearProvider.notifier).reset();
   }
 
   void _write({DateTime? date}) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => EditorScreen(
-        journalId: ref.read(selectedJournalProvider),
-        initialDate: date,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => EditorScreen(
+          journalId: ref.read(selectedJournalProvider),
+          initialDate: date,
+        ),
       ),
-    ));
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     final feed = ref.watch(feedProvider);
+    final latestDraft = ref.watch(latestDraftProvider).value;
     final journals = ref.watch(journalsProvider).value ?? const <Journal>[];
     final selected = ref.watch(selectedJournalProvider);
     final query = ref.watch(searchQueryProvider);
@@ -72,71 +148,208 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           SafeArea(
             bottom: false,
             child: feed.when(
-          loading: () => const _FeedLoading(),
-          error: (e, st) {
-            debugPrint('feed failed: $e\n$st');
-            return _FeedError(onRetry: () => ref.invalidate(feedProvider));
-          },
-          data: (entries) => CustomScrollView(
-            slivers: [
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _TopBar(
-                  height: 56 * scale.clamp(1.0, 1.5),
-                  ground: t.ground,
-                  searching: _searching,
-                  controller: _searchController,
-                  // Not "All journals": the rail directly underneath already
-                  // says that, and a pinned bar repeating the control below it
-                  // is wasted. This says how much there is to read instead.
-                  filterLabel: [
-                    if (selected != null)
-                      journals
-                              .where((j) => j.id == selected)
-                              .firstOrNull
-                              ?.name
-                              .toUpperCase() ??
-                          '',
-                    formatCount(entries.length, 'entry', 'entries')
-                        .toUpperCase(),
-                  ].where((s) => s.isNotEmpty).join('  ·  '),
-                  onQuery: (q) => ref.read(searchQueryProvider.notifier).set(q),
-                  onOpenSearch: () => setState(() => _searching = true),
-                  onCloseSearch: _closeSearch,
-                  onOpenJournals: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const JournalsScreen())),
+              loading: () => const _FeedLoading(),
+              error: (e, st) {
+                debugPrint('feed failed: $e\n$st');
+                return _FeedError(onRetry: () => ref.invalidate(feedProvider));
+              },
+              data: (entries) => RefreshIndicator(
+                onRefresh: () async {
+                  ref.read(feedBeforeProvider.notifier).set(null);
+                  if (_scroll.hasClients) {
+                    if (MediaQuery.disableAnimationsOf(context)) {
+                      _scroll.jumpTo(0);
+                    } else {
+                      await _scroll.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 190),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  }
+                },
+                child: CustomScrollView(
+                  controller: _scroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _TopBar(
+                        onJump: _jump,
+                        height: 56 * scale.clamp(1.0, 1.5),
+                        ground: t.ground,
+                        searching: _searching,
+                        controller: _searchController,
+                        // Not "All journals": the rail directly underneath already
+                        // says that, and a pinned bar repeating the control below it
+                        // is wasted. This says how much there is to read instead.
+                        filterLabel: [
+                          if (selected != null)
+                            journals
+                                    .where((j) => j.id == selected)
+                                    .firstOrNull
+                                    ?.name
+                                    .toUpperCase() ??
+                                '',
+                          formatCount(
+                            entries.length,
+                            'entry',
+                            'entries',
+                          ).toUpperCase(),
+                        ].where((s) => s.isNotEmpty).join('  ·  '),
+                        onQuery: (q) =>
+                            ref.read(searchQueryProvider.notifier).set(q),
+                        onOpenSearch: () => setState(() => _searching = true),
+                        onCloseSearch: _closeSearch,
+                        onOpenJournals: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const JournalsScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SliverToBoxAdapter(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          children: [
+                            if (_searching) ...[
+                              FilterChip(
+                                label: const Text('Titles only'),
+                                selected: ref.watch(titlesOnlyProvider),
+                                onSelected: (_) => ref
+                                    .read(titlesOnlyProvider.notifier)
+                                    .toggle(),
+                              ),
+                              const SizedBox(width: 8),
+                              FilterChip(
+                                label: const Text('This year'),
+                                selected: ref.watch(thisYearProvider),
+                                onSelected: (_) => ref
+                                    .read(thisYearProvider.notifier)
+                                    .toggle(),
+                              ),
+                              if (journals.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: FilterChip(
+                                    label: const Text('This journal'),
+                                    selected: selected != null,
+                                    onSelected: (_) => ref
+                                        .read(selectedJournalProvider.notifier)
+                                        .select(
+                                          selected == null
+                                              ? journals.first.id
+                                              : null,
+                                        ),
+                                  ),
+                                ),
+                            ],
+                            if (entries.isNotEmpty)
+                              TextButton.icon(
+                                onPressed: () => setState(() {
+                                  _selecting = !_selecting;
+                                  _selected.clear();
+                                }),
+                                icon: Icon(
+                                  _selecting ? Icons.close : Icons.checklist,
+                                  size: 18,
+                                ),
+                                label: Text(
+                                  _selecting ? 'Cancel selection' : 'Select',
+                                ),
+                              ),
+                            if (_selecting) ...[
+                              TextButton(
+                                onPressed: () => _bulk(false),
+                                child: Text('Tag (${_selected.length})'),
+                              ),
+                              TextButton(
+                                onPressed: () => _bulk(true),
+                                child: const Text('Move'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (!_searching)
+                      const SliverToBoxAdapter(child: _FeedHeader()),
+                    if (!_searching && latestDraft != null)
+                      SliverToBoxAdapter(
+                        child: ListTile(
+                          leading: const Icon(Icons.history),
+                          title: const Text('You left this unfinished'),
+                          subtitle: const Text(
+                            'Your writing was recovered. Continue where you left off.',
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  EditorScreen(entryId: latestDraft.id),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (journals.length > 1)
+                      SliverToBoxAdapter(
+                        child: _JournalRail(
+                          journals: journals,
+                          selected: selected,
+                          onSelect: (id) => ref
+                              .read(selectedJournalProvider.notifier)
+                              .select(id),
+                        ),
+                      ),
+                    if (!_searching)
+                      const SliverToBoxAdapter(child: _ThrowbackBand()),
+                    ..._buildDays(entries, selected, journals.length),
+                    if (entries.isEmpty && !_searching)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 8,
+                          ),
+                          child: Text(
+                            'A prompt for today: ${writingTemplates[1 + DateTime.now().day % (writingTemplates.length - 1)].description}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ),
+                    if (entries.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: _FeedEmpty(
+                          query: query,
+                          journalName: selected == null
+                              ? null
+                              : journals
+                                    .where((j) => j.id == selected)
+                                    .firstOrNull
+                                    ?.name,
+                          onClearSearch: _closeSearch,
+                          onShowAll: () => ref
+                              .read(selectedJournalProvider.notifier)
+                              .select(null),
+                          onWrite: _write,
+                        ),
+                      ),
+                    if (entries.length >= ref.watch(feedLimitProvider))
+                      SliverToBoxAdapter(
+                        child: TextButton(
+                          onPressed: () =>
+                              ref.read(feedLimitProvider.notifier).more(),
+                          child: const Text('Load older entries'),
+                        ),
+                      ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 108)),
+                  ],
                 ),
               ),
-              if (!_searching) const SliverToBoxAdapter(child: _FeedHeader()),
-              if (journals.length > 1)
-                SliverToBoxAdapter(
-                  child: _JournalRail(
-                    journals: journals,
-                    selected: selected,
-                    onSelect: (id) =>
-                        ref.read(selectedJournalProvider.notifier).select(id),
-                  ),
-                ),
-              if (!_searching) const SliverToBoxAdapter(child: _ThrowbackBand()),
-              ..._buildDays(entries, selected, journals.length),
-              if (entries.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _FeedEmpty(
-                    query: query,
-                    journalName: selected == null
-                        ? null
-                        : journals.where((j) => j.id == selected).firstOrNull?.name,
-                    onClearSearch: _closeSearch,
-                    onShowAll: () =>
-                        ref.read(selectedJournalProvider.notifier).select(null),
-                    onWrite: _write,
-                  ),
-                ),
-              const SliverToBoxAdapter(child: SizedBox(height: 108)),
-            ],
-          ),
-        ),
+            ),
           ),
           // The writing runs under the Write button, so the last 96dp fade to
           // the ground. Without it the button sits on top of a half-covered
@@ -172,7 +385,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   /// keeps the day keys in order; the gap between two consecutive keys is
   /// measured with [dayOrdinal] rather than `Duration.inDays`, which reports a
   /// DST-shortened day as no day at all.
-  List<Widget> _buildDays(List<Entry> entries, int? selected, int journalCount) {
+  List<Widget> _buildDays(
+    List<Entry> entries,
+    int? selected,
+    int journalCount,
+  ) {
     if (entries.isEmpty) return const [];
     final groups = <DateTime, List<Entry>>{};
     for (final e in entries) {
@@ -186,33 +403,112 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     for (var i = 0; i < days.length; i++) {
       final day = days[i];
       final dayEntries = groups[day]!;
-      final seconds =
-          dayEntries.fold<int>(0, (sum, e) => sum + e.writingSeconds);
+      final seconds = dayEntries.fold<int>(
+        0,
+        (sum, e) => sum + e.writingSeconds,
+      );
       // 45 minutes fills the segment. An hour left every ordinary day
       // drawing the same hairline, which defeats the point of weighting it.
       final weight = (seconds / 2700).clamp(0.0, 1.0);
       final isToday = dayOrdinal(day) == today;
 
-      children.add(SliverToBoxAdapter(
-        child: _DayHeading(
-          day: day,
-          seconds: seconds,
-          count: dayEntries.length,
-          isToday: isToday,
-          isFirst: i == 0,
-        ),
-      ));
-      children.add(SliverList.builder(
-        itemCount: dayEntries.length,
-        itemBuilder: (context, j) => SpineRail(
-          weight: weight,
-          capBottom: i == days.length - 1 && j == dayEntries.length - 1,
-          child: EntryRow(
-            entry: dayEntries[j],
-            showJournal: showJournal,
+      if (today - dayOrdinal(day) > 90) {
+        final monday = DateTime(day.year, day.month, day.day - day.weekday + 1);
+        final weekEntries = entries
+            .where(
+              (e) =>
+                  dayOrdinal(e.entryDate) >= dayOrdinal(monday) &&
+                  dayOrdinal(e.entryDate) < dayOrdinal(monday) + 7,
+            )
+            .toList();
+        if (i > 0 &&
+            dayOrdinal(days[i - 1]) >= dayOrdinal(monday) &&
+            dayOrdinal(days[i - 1]) < dayOrdinal(monday) + 7) {
+          continue;
+        }
+        children.add(
+          SliverToBoxAdapter(
+            child: ExpansionTile(
+              title: Text('Week of ${DateFormat.yMMMd().format(monday)}'),
+              subtitle: Text(
+                '${weekEntries.length} entries \u00b7 ${formatTotalTime(weekEntries.fold<int>(0, (s, e) => s + e.writingSeconds))}',
+              ),
+              leading: SizedBox(
+                width: 10,
+                height: 40,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: context.tokens.spineWeight,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              children: [
+                for (final e in weekEntries)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 20),
+                    child: EntryRow(
+                      entry: e,
+                      dateLabel: DateFormat.MMMd().format(e.entryDate),
+                      onSelect: _selecting
+                          ? () => setState(
+                              () => _selected.contains(e.id)
+                                  ? _selected.remove(e.id)
+                                  : _selected.add(e.id),
+                            )
+                          : null,
+                      selected: _selected.contains(e.id),
+                    ),
+                  ),
+              ],
+            ),
           ),
+        );
+        continue;
+      }
+      children.add(
+        SliverMainAxisGroup(
+          slivers: [
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _StickyDay(
+                height:
+                    52 *
+                    (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
+                      1,
+                      2,
+                    ),
+                child: _DayHeading(
+                  day: day,
+                  seconds: seconds,
+                  count: dayEntries.length,
+                  isToday: isToday,
+                  isFirst: i == 0,
+                ),
+              ),
+            ),
+            SliverList.builder(
+              itemCount: dayEntries.length,
+              itemBuilder: (context, j) => SpineRail(
+                weight: weight,
+                capBottom: i == days.length - 1 && j == dayEntries.length - 1,
+                child: EntryRow(
+                  entry: dayEntries[j],
+                  showJournal: showJournal,
+                  selected: _selected.contains(dayEntries[j].id),
+                  onSelect: _selecting
+                      ? () => setState(
+                          () => _selected.contains(dayEntries[j].id)
+                              ? _selected.remove(dayEntries[j].id)
+                              : _selected.add(dayEntries[j].id),
+                        )
+                      : null,
+                ),
+              ),
+            ),
+          ],
         ),
-      ));
+      );
 
       if (i < days.length - 1) {
         final missing = dayOrdinal(day) - dayOrdinal(days[i + 1]) - 1;
@@ -233,6 +529,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 class _TopBar extends SliverPersistentHeaderDelegate {
   _TopBar({
     required this.height,
+    required this.onJump,
     required this.ground,
     required this.searching,
     required this.controller,
@@ -243,6 +540,7 @@ class _TopBar extends SliverPersistentHeaderDelegate {
     required this.onOpenJournals,
   });
 
+  final VoidCallback onJump;
   final double height;
   final Color ground;
   final bool searching;
@@ -273,7 +571,7 @@ class _TopBar extends SliverPersistentHeaderDelegate {
                     textInputAction: TextInputAction.search,
                     style: text.titleSmall,
                     decoration: const InputDecoration(
-                      hintText: 'Search titles and writing',
+                      hintText: 'Search titles, writing and tags',
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
@@ -281,8 +579,18 @@ class _TopBar extends SliverPersistentHeaderDelegate {
                     ),
                     onChanged: onQuery,
                   )
-                : Text(filterLabel.toUpperCase(),
-                    style: text.utility, overflow: TextOverflow.ellipsis),
+                : InkWell(
+                    onTap: onJump,
+                    onLongPress: onJump,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        filterLabel.toUpperCase(),
+                        style: text.utility,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
           ),
           IconButton(
             tooltip: searching ? 'Close search' : 'Search entries',
@@ -320,8 +628,9 @@ class _FeedHeader extends ConsumerWidget {
     final now = DateTime.now();
     final streak = ref.watch(streaksProvider).value;
     final entries = ref.watch(feedProvider).value ?? const <Entry>[];
-    final wroteToday = entries.any((e) =>
-        !e.isDraft && dayOrdinal(e.entryDate) == dayOrdinal(now));
+    final wroteToday = entries.any(
+      (e) => !e.isDraft && dayOrdinal(e.entryDate) == dayOrdinal(now),
+    );
 
     final facts = <String>[
       if (streak != null && streak.current > 0)
@@ -336,9 +645,17 @@ class _FeedHeader extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(DateFormat('EEEE').format(now).toUpperCase(), style: text.utility),
+          Text(
+            DateFormat('EEEE').format(now).toUpperCase(),
+            style: text.utility,
+          ),
           const SizedBox(height: 3),
-          Text(DateFormat('d MMMM').format(now), style: text.displayLarge),
+          Text(
+            DateFormat('d MMMM').format(now),
+            style: MediaQuery.textScalerOf(context).scale(14) > 22
+                ? text.displaySmall
+                : text.displayLarge,
+          ),
           const SizedBox(height: 9),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -358,8 +675,10 @@ class _FeedHeader extends ConsumerWidget {
                 ),
               ),
               Expanded(
-                child: Text(facts.join('  ·  '),
-                    style: text.meta.copyWith(color: t.inkDim)),
+                child: Text(
+                  facts.join('  ·  '),
+                  style: text.meta.copyWith(color: t.inkDim),
+                ),
               ),
             ],
           ),
@@ -462,7 +781,9 @@ class _Pill extends StatelessWidget {
                       height: 6,
                       decoration: BoxDecoration(
                         color: color,
-                        borderRadius: const BorderRadius.all(Radius.circular(1.5)),
+                        borderRadius: const BorderRadius.all(
+                          Radius.circular(1.5),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 7),
@@ -514,30 +835,40 @@ class _DayHeading extends StatelessWidget {
         : DateFormat(thisYear ? 'EEE d MMM' : 'EEE d MMM yyyy').format(day);
     final time = formatWritingTime(seconds);
 
-    return SpineRail(
-      node: isToday ? SpineNode.today : SpineNode.day,
-      weight: (seconds / 3600).clamp(0.0, 1.0),
-      capTop: isFirst,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 14, 20, 6),
-        child: Wrap(
-          spacing: 10,
-          runSpacing: 2,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Text(
-              label.toUpperCase(),
-              style: text.utility.copyWith(
-                color: isToday ? t.accent : t.inkDim,
-                fontWeight: FontWeight.w600,
-              ),
+    return Semantics(
+      header: true,
+      child: Tooltip(
+        excludeFromSemantics: true,
+        message:
+            '$count entries \u00b7 ${formatTotalTime(seconds)} at the page',
+        child: SpineRail(
+          node: isToday ? SpineNode.today : SpineNode.day,
+          weight: (seconds / 3600).clamp(0.0, 1.0),
+          capTop: isFirst,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(0, 14, 20, 6),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: text.utility.copyWith(
+                    color: isToday ? t.accent : t.inkDim,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (time.isNotEmpty)
+                  Text(time.toUpperCase(), style: text.utility),
+                if (count > 1)
+                  Text(
+                    formatCount(count, 'entry', 'entries').toUpperCase(),
+                    style: text.utility,
+                  ),
+              ],
             ),
-            if (time.isNotEmpty)
-              Text(time.toUpperCase(), style: text.utility),
-            if (count > 1)
-              Text(formatCount(count, 'entry', 'entries').toUpperCase(),
-                  style: text.utility),
-          ],
+          ),
         ),
       ),
     );
@@ -559,7 +890,9 @@ class _Gap extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(0, 11, 20, 11),
         child: Text(
           formatGap(days).toUpperCase(),
-          style: Theme.of(context).textTheme.utility.copyWith(color: t.inkFaint),
+          style: Theme.of(
+            context,
+          ).textTheme.utility.copyWith(color: t.inkFaint),
         ),
       ),
     );
@@ -583,7 +916,16 @@ class _ThrowbackBand extends ConsumerWidget {
     final t = context.tokens;
     final text = Theme.of(context).textTheme;
     final entries = ref.watch(throwbackProvider).value ?? const <Entry>[];
-    if (entries.isEmpty) return const SizedBox.shrink();
+    final week = ref.watch(memoriesProvider('week')).value ?? const <Entry>[];
+    final first =
+        (ref.watch(memoriesProvider('first')).value ?? const <Entry>[])
+            .where(
+              (e) => dayOrdinal(DateTime.now()) - dayOrdinal(e.entryDate) >= 7,
+            )
+            .toList();
+    if (entries.isEmpty && week.isEmpty && first.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Container(
       margin: const EdgeInsets.only(top: 2, bottom: 2),
@@ -596,11 +938,25 @@ class _ThrowbackBand extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 9, 20, 1),
-            child: Text('ON THIS DAY', style: text.utility),
-          ),
+          if (entries.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 9, 20, 1),
+              child: Text('ON THIS DAY', style: text.utility),
+            ),
           for (final e in entries.take(3)) _ThrowbackRow(entry: e),
+          if (week.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 9, 20, 1),
+              child: Text('THIS WEEK LAST YEAR', style: text.utility),
+            ),
+          for (final e in week.take(2)) _ThrowbackRow(entry: e),
+          if (first.isNotEmpty && entries.isEmpty && week.isEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 9, 20, 1),
+              child: Text('YOUR FIRST ENTRY', style: text.utility),
+            ),
+            _ThrowbackRow(entry: first.first),
+          ],
           if (entries.length > 3)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 2, 20, 4),
@@ -630,11 +986,12 @@ class _ThrowbackRow extends StatelessWidget {
     final years = DateTime.now().year - entry.entryDate.year;
     final title = entry.title.trim().isNotEmpty
         ? entry.title.trim()
-        : entry.plainText.replaceAll(RegExp(r'\s+'), ' ').trim();
+        : entryPreview(entry.plainText);
 
     return InkWell(
-      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => EditorScreen(entryId: entry.id))),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => EditorScreen(entryId: entry.id)),
+      ),
       child: Container(
         constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
@@ -643,11 +1000,18 @@ class _ThrowbackRow extends StatelessWidget {
             // Widens with the text scale rather than staying at 62dp, where
             // "1 year" wrapped onto two lines at the largest system font.
             SizedBox(
-              width: 62 *
-                  (MediaQuery.textScalerOf(context).scale(11) / 11)
-                      .clamp(1.0, 2.0),
+              width:
+                  62 *
+                  (MediaQuery.textScalerOf(context).scale(11) / 11).clamp(
+                    1.0,
+                    2.0,
+                  ),
               child: Text(
-                years == 1 ? '1 year' : '$years years',
+                years == 0
+                    ? DateFormat.MMMd().format(entry.entryDate)
+                    : years == 1
+                    ? '1 year'
+                    : '$years years',
                 style: text.meta.copyWith(color: t.inkFaint),
               ),
             ),
@@ -682,7 +1046,10 @@ class _FeedLoading extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(
-              width: 18, height: 18, child: CircularProgressIndicator()),
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(),
+          ),
           const SizedBox(height: 14),
           Text('OPENING YOUR JOURNAL', style: text.utility),
         ],
@@ -745,27 +1112,31 @@ class _FeedEmpty extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final searching = query.trim().isNotEmpty;
 
-    final (String title, String body, String action, VoidCallback onAction) =
-        switch ((searching, journalName)) {
+    final (
+      String title,
+      String body,
+      String action,
+      VoidCallback onAction,
+    ) = switch ((searching, journalName)) {
       (true, _) => (
-          'No entry matches "${query.trim()}"',
-          'Search looks at titles and the writing itself. A shorter word usually finds more.',
-          'Clear search',
-          onClearSearch,
-        ),
+        'No entry matches "${query.trim()}"',
+        'Search looks at titles and the writing itself. A shorter word usually finds more.',
+        'Clear search',
+        onClearSearch,
+      ),
       (false, final String name) => (
-          'Nothing in $name yet',
-          'This journal is empty. Write the first entry in it, or go back to all journals.',
-          'Show all journals',
-          onShowAll,
-        ),
+        'Nothing in $name yet',
+        'This journal is empty. Write the first entry in it, or go back to all journals.',
+        'Show all journals',
+        onShowAll,
+      ),
       _ => (
-          'Nothing written yet',
-          'A first entry does not have to be long. One line about today is a start, '
-              'and it stays on this device.',
-          'Write today',
-          onWrite,
-        ),
+        'Nothing written yet',
+        'A first entry does not have to be long. One line about today is a start, '
+            'and it stays on this device.',
+        'Write today',
+        onWrite,
+      ),
     };
 
     return Padding(
@@ -785,4 +1156,24 @@ class _FeedEmpty extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StickyDay extends SliverPersistentHeaderDelegate {
+  _StickyDay({required this.child, required this.height});
+  final double height;
+  final Widget child;
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) => SizedBox.expand(
+    child: ColoredBox(color: context.tokens.ground, child: child),
+  );
+  @override
+  bool shouldRebuild(covariant _StickyDay oldDelegate) => true;
 }

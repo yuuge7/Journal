@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 /// Owns the `attachments/` folder inside the app documents directory.
 /// The database only stores file names relative to that folder.
 class AttachmentService {
+  AttachmentService({Directory? directory}) : _dir = directory;
   Directory? _dir;
 
   Future<Directory> attachmentsDir() async {
@@ -19,7 +20,22 @@ class AttachmentService {
   }
 
   Future<File> fileFor(String fileName) async =>
-      File(p.join((await attachmentsDir()).path, fileName));
+      File(p.join((await attachmentsDir()).path, p.basename(fileName)));
+
+  Future<String> storeFile(String path) async {
+    final name = '${const Uuid().v4()}${p.extension(path)}';
+    await File(path).copy((await fileFor(name)).path);
+    return name;
+  }
+
+  Future<void> sweep(Set<String> referenced) async {
+    final dir = await attachmentsDir();
+    await for (final file in dir.list()) {
+      if (file is File && !referenced.contains(p.basename(file.path))) {
+        await file.delete();
+      }
+    }
+  }
 
   /// Opens the system picker / camera and copies the image into the
   /// attachments folder. Returns the stored file name, or null if cancelled.
@@ -31,7 +47,9 @@ class AttachmentService {
       imageQuality: 88,
     );
     if (picked == null) return null;
-    final ext = p.extension(picked.path).isEmpty ? '.jpg' : p.extension(picked.path);
+    final ext = p.extension(picked.path).isEmpty
+        ? '.jpg'
+        : p.extension(picked.path);
     final name = '${const Uuid().v4()}$ext';
     final target = await fileFor(name);
     await File(picked.path).copy(target.path);

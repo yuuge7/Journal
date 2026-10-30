@@ -62,6 +62,9 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Test at large text scale
+        run: flutter test --dart-define=TEST_TEXT_SCALE=2
+
       - name: Decide the next version
         id: version
         run: |
@@ -117,6 +120,9 @@ jobs:
       - name: Build the release APK
         run: flutter build apk --release
 
+      - name: Build the release bundle and symbols
+        run: flutter build appbundle --release --obfuscate --split-debug-info=build/symbols
+
       - name: Verify the signature and name the artifact
         run: |
           set -euo pipefail
@@ -131,6 +137,15 @@ jobs:
           fi
           mkdir -p dist
           cp "$apk" "dist/Journal-${{ steps.version.outputs.tag }}.apk"
+
+      - name: Preserve the bundle and mapping files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-and-symbols
+          path: |
+            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/mapping/release/mapping.txt
+            build/symbols/**
 
       - name: Push the version bump
         run: |
@@ -152,5 +167,6 @@ jobs:
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             "dist/Journal-${{ steps.version.outputs.tag }}.apk" \
+            build/app/outputs/bundle/release/*.aab \
             --title "Journal ${{ steps.version.outputs.tag }}" \
             --generate-notes

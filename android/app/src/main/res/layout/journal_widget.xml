@@ -1,0 +1,5 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp" android:background="#1B1F26">
+    <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="A page for today" android:textSize="18sp" android:textColor="#E0A84A" />
+    <TextView android:id="@+id/widget_streak" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="0 day streak" android:textSize="14sp" android:textColor="#E7E4DC" android:layout_marginTop="8dp" />
+    <Button android:id="@+id/widget_write" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Write" android:layout_marginTop="8dp" />
+</LinearLayout>

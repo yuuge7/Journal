@@ -4,7 +4,11 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
 class NavItem {
-  const NavItem({required this.icon, required this.activeIcon, required this.label});
+  const NavItem({
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+  });
   final IconData icon;
   final IconData activeIcon;
   final String label;
@@ -50,6 +54,7 @@ class AppNavBar extends StatelessWidget {
                     selected: i == index,
                     label: items[i].label,
                     excludeSemantics: true,
+                    onTap: () => onSelected(i),
                     child: InkResponse(
                       onTap: () => onSelected(i),
                       radius: 44,
@@ -72,28 +77,36 @@ class AppNavBar extends StatelessWidget {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
-                                  i == index ? items[i].activeIcon : items[i].icon,
+                                  i == index
+                                      ? items[i].activeIcon
+                                      : items[i].icon,
                                   size: 21,
                                   color: i == index ? t.ink : t.inkFaint,
                                 ),
-                                const SizedBox(height: 4),
+                                if (MediaQuery.textScalerOf(context).scale(14) <
+                                    23)
+                                  const SizedBox(height: 4),
                                 // The horizontal padding is what lets a long
                                 // label ellipsize instead of running into its
                                 // neighbour at large text scales.
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(horizontal: 6),
-                                  child: Text(
-                                  items[i].label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: text.labelMedium!.copyWith(
-                                    color: i == index ? t.ink : t.inkFaint,
-                                    fontWeight:
-                                        i == index ? FontWeight.w600 : FontWeight.w500,
+                                if (MediaQuery.textScalerOf(context).scale(14) <
+                                    23)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                    ),
+                                    child: Text(
+                                      items[i].label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: text.labelMedium!.copyWith(
+                                        color: i == index ? t.ink : t.inkFaint,
+                                        fontWeight: i == index
+                                            ? FontWeight.w600
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
                                   ),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
@@ -144,7 +157,9 @@ class WriteButton extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 label,
-                style: Theme.of(context).textTheme.labelLarge!.copyWith(color: t.ground),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge!.copyWith(color: t.ground),
               ),
             ],
           ),

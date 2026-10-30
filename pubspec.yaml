@@ -9,9 +9,8 @@ environment:
 dependencies:
   archive: ^4.0.9
   cryptography: ^2.9.0
-  drift: ^2.34.1
+  drift: 2.35.3
   drift_flutter: ^0.3.0
-  file_selector: ^1.1.0
   flutter:
     sdk: flutter
   flutter_localizations:
@@ -22,19 +21,23 @@ dependencies:
   intl: ^0.20.2
   path: ^1.9.1
   path_provider: ^2.1.6
+  pdf: ^3.13.1
   rxdart: ^0.28.0
   share_plus: ^12.0.2
   sqlite3_flutter_libs: ^0.6.0+eol
   table_calendar: ^3.2.0
+  url_launcher: 6.3.2
   uuid: ^4.5.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  drift_dev: ^2.34.0
+  drift_dev: 2.35.2
   build_runner: ^2.15.1
   flutter_launcher_icons: ^0.14.4
+  integration_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
