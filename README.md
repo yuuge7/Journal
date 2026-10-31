@@ -38,7 +38,7 @@ An offline-first journaling app for Android. Entries, photos, moods, tags and st
 **Privacy and Android**
 
 - Light, dark or system theme. Bundled fonts, large-text layouts, semantic actions and reduced-motion support.
-- Optional biometric/device-PIN app lock and screenshot/recents protection.
+- Optional app lock with biometric unlock and a dedicated Use device PIN action (also supports your device pattern or password), plus screenshot/recents protection. Journal never stores your device PIN.
 - Edge-to-edge system bars and predictive back. Android cloud backup and device-transfer backup are disabled deliberately.
 - A home-screen widget with today's bead, streak and Write action; a launcher shortcut and Quick Settings Write tile.
 - No account, analytics or release-build network permission. Microphone and location permissions are requested only when those features are used.
@@ -165,7 +165,7 @@ Android UI screenshots can be collected with `flutter drive --driver test_driver
 
 For the small-display pass, set the emulator to 960×2100 pixels at 480 dpi (320dp wide), then run the same driver with `--target integration_test/large_text_test.dart`. It checks both themes with 2× text, including the editor with the keyboard open. Restore the display with `adb shell wm size reset` and `adb shell wm density reset` afterwards.
 
-The optional `integration_test/platform_test.dart` pass uses `--dart-define=TEST_DEVICE_PIN=true`. Configure a temporary PIN on a test emulator, enter it in Android's unlock prompt, grant location permission and supply a GPS fix. The test verifies unlocking and relocking on backgrounding. Remove the temporary PIN afterwards. Physical Motorola launcher masks and enrolled biometric hardware still require checks on those devices.
+The optional `integration_test/platform_test.dart` pass uses `--dart-define=TEST_DEVICE_PIN=true`. Configure a temporary PIN on a test emulator, enter it in Android's unlock prompt, grant location permission and supply a GPS fix. The test selects **Use device PIN** directly and verifies unlocking and relocking on backgrounding. App lock changes in Settings also require the device PIN, pattern or password. Remove the temporary PIN afterwards. Physical Motorola launcher masks and enrolled biometric hardware still require checks on those devices.
 
 ## Signing
 

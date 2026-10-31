@@ -28,6 +28,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String? _progress;
   double _fraction = 0;
+  bool _changingLock = false;
   late final _version = PlatformService.call<String>('version');
   void _onProgress(BackupProgress progress) {
     if (mounted) {
@@ -360,20 +361,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           SwitchListTile(
             title: const Text('App lock'),
             subtitle: const Text(
-              'Unlock with your device biometrics or PIN. Locks when Journal goes into the background.',
+              'Unlock with biometrics or use your device PIN, pattern or password. Locks when Journal goes into the background.',
             ),
             value: lock,
-            onChanged: (value) async {
-              try {
-                if (await PlatformService.authenticate()) {
-                  await ref
-                      .read(databaseProvider)
-                      .setSetting('app_lock', '$value');
-                }
-              } catch (e) {
-                _snack(e.toString());
-              }
-            },
+            onChanged: _changingLock
+                ? null
+                : (value) async {
+                    setState(() => _changingLock = true);
+                    try {
+                      if (await PlatformService.authenticate(
+                        deviceCredentialOnly: true,
+                      )) {
+                        await ref
+                            .read(databaseProvider)
+                            .setSetting('app_lock', '$value');
+                      }
+                    } on PlatformException catch (e) {
+                      _snack(e.message ?? "Couldn't change app lock.");
+                    } catch (_) {
+                      _snack("Couldn't change app lock. Try again.");
+                    } finally {
+                      if (mounted) setState(() => _changingLock = false);
+                    }
+                  },
           ),
           SwitchListTile(
             title: const Text('Hide screenshots and recents'),

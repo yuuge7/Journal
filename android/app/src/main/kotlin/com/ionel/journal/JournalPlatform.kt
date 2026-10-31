@@ -31,7 +31,7 @@ class JournalPlatform(private val activity: MainActivity, messenger: BinaryMesse
                 when (call.method) {
                     "launchAction" -> { val write = activity.intent.action == "com.ionel.journal.WRITE"; activity.intent.action = Intent.ACTION_MAIN; result.success(if (write) "write" else null) }
                     "secure" -> { if (call.argument<Boolean>("enabled") == true) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE); result.success(null) }
-                    "authenticate" -> authenticate(result)
+                    "authenticate" -> authenticate(result, call.argument<Boolean>("deviceCredentialOnly") == true)
                     "location" -> permission(Manifest.permission.ACCESS_FINE_LOCATION, result) { location(result) }
                     "startRecording" -> permission(Manifest.permission.RECORD_AUDIO, result) {
                         check(recorder == null) { "Already recording" }
@@ -98,21 +98,41 @@ class JournalPlatform(private val activity: MainActivity, messenger: BinaryMesse
         if (grants.firstOrNull() == PackageManager.PERMISSION_GRANTED) try { action?.invoke() } catch (e: Exception) { result?.error("PLATFORM", e.message, null) }
         else result?.error("DENIED", "Permission was not granted", null)
     }
-    private fun authenticate(result: MethodChannel.Result) {
+    private fun authenticate(result: MethodChannel.Result, deviceCredentialOnly: Boolean) {
+        if (authResult != null) { result.error("BUSY", "Unlock already open", null); return }
         val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (!keyguard.isDeviceSecure) { result.error("NO_LOCK", "Set a device PIN or biometric in Android settings first.", null); return }
-        if (Build.VERSION.SDK_INT >= 30) {
-            BiometricPrompt.Builder(activity).setTitle("Unlock Journal").setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL).build()
-                .authenticate(CancellationSignal(), activity.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(auth: BiometricPrompt.AuthenticationResult) { result.success(true) }
-                    override fun onAuthenticationError(code: Int, message: CharSequence) { result.success(false) }
-                })
-        } else {
-            if (authResult != null) { result.error("BUSY", "Unlock already open", null); return }
-            authResult = result
-            @Suppress("DEPRECATION") val intent = keyguard.createConfirmDeviceCredentialIntent("Unlock Journal", "Use your device PIN")
-            activity.startActivityForResult(intent, 4931)
+        if (!keyguard.isDeviceSecure) { result.error("NO_LOCK", "Set a device PIN, pattern or password in Android settings first.", null); return }
+        authResult = result
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val credentials = android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                val authenticators = if (deviceCredentialOnly) credentials else credentials or android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG
+                BiometricPrompt.Builder(activity)
+                    .setTitle("Unlock Journal")
+                    .setAllowedAuthenticators(authenticators)
+                    .build()
+                    .authenticate(CancellationSignal(), activity.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(auth: BiometricPrompt.AuthenticationResult) { finishAuthentication(result, true) }
+                        override fun onAuthenticationError(code: Int, message: CharSequence) { finishAuthentication(result, false) }
+                    })
+            } else {
+                @Suppress("DEPRECATION") val intent = keyguard.createConfirmDeviceCredentialIntent("Unlock Journal", "Use your device PIN, pattern or password")
+                if (intent == null) {
+                    authResult = null
+                    result.error("NO_LOCK", "Set a device PIN, pattern or password in Android settings first.", null)
+                    return
+                }
+                activity.startActivityForResult(intent, 4931)
+            }
+        } catch (e: Exception) {
+            authResult = null
+            throw e
         }
+    }
+    private fun finishAuthentication(result: MethodChannel.Result, authenticated: Boolean) {
+        if (authResult !== result) return
+        authResult = null
+        result.success(authenticated)
     }
     fun onActivityResult(code: Int, resultCode: Int): Boolean {
         if (code != 4931) return false

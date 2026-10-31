@@ -45,7 +45,7 @@ void main() {
       }
       expect(find.text('Unlock Journal'), findsOneWidget);
       debugPrint('READY_FOR_DEVICE_PIN');
-      await tester.tap(find.text('Unlock Journal'));
+      await tester.tap(find.text('Use device PIN'));
       for (var i = 0; i < 240; i++) {
         await tester.pump(const Duration(milliseconds: 250));
         if (find.text('Unlock Journal').evaluate().isEmpty) break;

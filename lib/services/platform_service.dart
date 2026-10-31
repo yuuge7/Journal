@@ -13,8 +13,23 @@ class PlatformService {
 
   static Future<void> secure(bool enabled) =>
       call<void>('secure', {'enabled': enabled});
-  static Future<bool> authenticate() async =>
-      await call<bool>('authenticate') ?? false;
+  static bool _authenticating = false;
+  static bool get authenticating => _authenticating;
+
+  /// Android verifies the device credential; Journal never sees the PIN.
+  static Future<bool> authenticate({bool deviceCredentialOnly = false}) async {
+    if (_authenticating) return false;
+    _authenticating = true;
+    try {
+      return await call<bool>('authenticate', {
+            'deviceCredentialOnly': deviceCredentialOnly,
+          }) ??
+          false;
+    } finally {
+      _authenticating = false;
+    }
+  }
+
   static Future<String?> location() => call<String>('location');
   static Future<String?> startRecording() => call<String>('startRecording');
   static Future<String?> stopRecording() => call<String>('stopRecording');

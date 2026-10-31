@@ -81,21 +81,33 @@ class _JournalAppState extends ConsumerState<JournalApp>
     });
   }
 
-  Future<void> _unlock() async {
+  Future<void> _unlock({bool deviceCredentialOnly = false}) async {
     if (_authenticating) return;
-    _authenticating = true;
+    setState(() {
+      _authenticating = true;
+      _lockError = null;
+    });
     try {
-      if (await PlatformService.authenticate() && mounted) {
+      final authenticated = await PlatformService.authenticate(
+        deviceCredentialOnly: deviceCredentialOnly,
+      );
+      if (authenticated && mounted) {
         setState(() {
           _locked = false;
           _lockError = null;
         });
         _openPending();
       }
-    } catch (e) {
-      if (mounted) setState(() => _lockError = e.toString());
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() => _lockError = e.message ?? "Couldn't unlock Journal.");
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _lockError = "Couldn't unlock Journal. Try again.");
+      }
     } finally {
-      _authenticating = false;
+      if (mounted) setState(() => _authenticating = false);
     }
   }
 
@@ -120,6 +132,19 @@ class _JournalAppState extends ConsumerState<JournalApp>
   @override
   Widget build(BuildContext context) {
     final mode = ref.watch(preferenceProvider('theme')).value;
+    // Subscribe before the first background event so relocking reads a loaded
+    // preference, rather than starting the settings stream while going away.
+    ref.listen(preferenceProvider('app_lock'), (_, value) {
+      // A device credential activity can background and relock Journal while
+      // Settings verifies a request to turn app lock off.
+      if (value.value == 'false' && _locked) {
+        setState(() {
+          _locked = false;
+          _lockError = null;
+        });
+        _openPending();
+      }
+    });
     ref.listen(preferenceProvider('secure_screen'), (_, value) {
       PlatformService.secure(value.value == 'true');
     });
@@ -200,7 +225,7 @@ class _JournalAppState extends ConsumerState<JournalApp>
                 child: Material(
                   child: SafeArea(
                     child: Center(
-                      child: Padding(
+                      child: SingleChildScrollView(
                         padding: const EdgeInsets.all(28),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -210,13 +235,41 @@ class _JournalAppState extends ConsumerState<JournalApp>
                             Text(
                               'Your private notebook',
                               style: Theme.of(context).textTheme.titleLarge,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Unlock with biometrics or your device screen lock.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                              textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 16),
-                            FilledButton(
-                              onPressed: _unlock,
-                              child: const Text('Unlock Journal'),
+                            FilledButton.icon(
+                              onPressed: _authenticating ? null : _unlock,
+                              icon: const Icon(Icons.fingerprint),
+                              label: const Text('Unlock Journal'),
                             ),
-                            if (_lockError != null) Text(_lockError!),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _authenticating
+                                  ? null
+                                  : () => _unlock(deviceCredentialOnly: true),
+                              icon: const Icon(Icons.pin_outlined),
+                              label: const Text('Use device PIN'),
+                            ),
+                            if (_lockError != null) ...[
+                              const SizedBox(height: 12),
+                              Semantics(
+                                liveRegion: true,
+                                child: Text(
+                                  _lockError!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.error,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
